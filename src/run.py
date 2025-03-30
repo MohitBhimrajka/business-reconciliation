@@ -26,7 +26,7 @@ from reporting import (
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
@@ -45,6 +45,11 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default='data',
         help='Directory containing data files (default: data/)'
+    )
+    parser.add_argument(
+        '--launch-dashboard',
+        action='store_true',
+        help='Launch Streamlit dashboard after processing'
     )
     return parser.parse_args()
 
@@ -194,7 +199,21 @@ def main():
         logger.info(f"Total returns processed: {len(returns_df):,}")
         logger.info(f"Total settlements processed: {len(settlement_df):,}")
         logger.info(f"Anomalies identified: {len(anomalies_df):,}")
+        
+        # Print report summary
+        logger.info("Status Distribution:")
+        for status, count in summary['status_counts'].items():
+            logger.info(f"  {status}: {count:,}")
         logger.info("=" * 50)
+        
+        # Launch dashboard if requested
+        if args.launch_dashboard:
+            logger.info("Launching Streamlit dashboard...")
+            import subprocess
+            import sys
+            streamlit_cmd = [sys.executable, "-m", "streamlit", "run", "src/app.py"]
+            subprocess.Popen(streamlit_cmd)
+            logger.info("Dashboard launched at http://localhost:8501")
         
         return 0
         

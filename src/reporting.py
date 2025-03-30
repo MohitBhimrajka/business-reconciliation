@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 
 from utils import (
     ensure_directories_exist, read_file, ANALYSIS_OUTPUT, REPORT_OUTPUT,
-    VISUALIZATION_DIR, ANOMALIES_OUTPUT
+    VISUALIZATION_DIR, ANOMALIES_OUTPUT, REPORT_DIR
 )
 
 logger = logging.getLogger(__name__)
@@ -40,35 +40,52 @@ def generate_report(summary: Dict) -> str:
     Returns:
         Formatted report string
     """
+    # Calculate percentages
+    total_orders = summary['total_orders']
+    cancelled_pct = (summary['status_counts'].get('Cancelled', 0) / total_orders * 100) if total_orders > 0 else 0
+    returned_pct = (summary['status_counts'].get('Returned', 0) / total_orders * 100) if total_orders > 0 else 0
+    settled_pct = (summary['status_counts'].get('Completed - Settled', 0) / total_orders * 100) if total_orders > 0 else 0
+    pending_pct = (summary['status_counts'].get('Completed - Pending Settlement', 0) / total_orders * 100) if total_orders > 0 else 0
+    
+    # Calculate average values
+    avg_profit = (summary['total_order_settlement'] / summary['status_counts'].get('Completed - Settled', 1)) if summary['status_counts'].get('Completed - Settled', 0) > 0 else 0
+    avg_loss = (summary['total_return_settlement'] / summary['status_counts'].get('Returned', 1)) if summary['status_counts'].get('Returned', 0) > 0 else 0
+    
     report = [
-        "Order Reconciliation Report",
-        "=" * 50,
-        f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "=== Order Reconciliation Report ===",
         "",
-        "Summary Statistics",
-        "-" * 50,
-        f"Total Orders: {summary['total_orders']:,}",
-        f"Net Profit/Loss: ₹{summary['net_profit_loss']:,.2f}",
+        "=== Order Counts ===",
+        f"Total Orders: {total_orders}",
+        f"Cancelled Orders: {summary['status_counts'].get('Cancelled', 0)} ({cancelled_pct:.2f}%)",
+        f"Returned Orders: {summary['status_counts'].get('Returned', 0)} ({returned_pct:.2f}%)",
+        f"Completed and Settled Orders: {summary['status_counts'].get('Completed - Settled', 0)} ({settled_pct:.2f}%)",
+        f"Completed but Pending Settlement Orders: {summary['status_counts'].get('Completed - Pending Settlement', 0)} ({pending_pct:.2f}%)",
+        "",
+        "=== Financial Analysis ===",
+        f"Total Profit from Settled Orders: {summary['total_order_settlement']:.2f}",
+        f"Total Loss from Returned Orders: {abs(summary['total_return_settlement']):.2f}",
+        f"Net Profit/Loss: {summary['net_profit_loss']:.2f}",
+        "",
+        "=== Settlement Information ===",
+        f"Total Return Settlement Amount: ₹{abs(summary['total_return_settlement']):,.2f}",
+        f"Total Order Settlement Amount: ₹{summary['total_order_settlement']:,.2f}",
+        f"Potential Settlement Value (Pending): ₹{summary.get('pending_settlement_value', 0):,.2f}",
+        f"Status Changes in This Run: {summary['status_changes']}",
+        f"Orders Newly Settled in This Run: {summary['settlement_changes']}",
+        f"Orders Newly Pending in This Run: {summary['pending_changes']}",
+        "",
+        "=== Key Metrics ===",
         f"Settlement Rate: {summary['settlement_rate']:.2f}%",
         f"Return Rate: {summary['return_rate']:.2f}%",
+        f"Average Profit per Settled Order: {avg_profit:.2f}",
+        f"Average Loss per Returned Order: {abs(avg_loss):.2f}",
         "",
-        "Status Distribution",
-        "-" * 50
+        "=== Recommendations ===",
+        "1. Monitor orders with status 'Completed - Pending Settlement' to ensure they get settled.",
+        "2. Analyze orders with high losses to identify patterns and potential issues.",
+        "3. Investigate return patterns to reduce return rates.",
+        "4. Consider strategies to increase settlement rates for shipped orders."
     ]
-    
-    for status, count in summary['status_counts'].items():
-        report.append(f"{status}: {count:,}")
-    
-    report.extend([
-        "",
-        "Settlement Information",
-        "-" * 50,
-        f"Total Return Settlement: ₹{summary['total_return_settlement']:,.2f}",
-        f"Total Order Settlement: ₹{summary['total_order_settlement']:,.2f}",
-        f"Status Changes This Run: {summary['status_changes']:,}",
-        f"Orders Settled This Run: {summary['settlement_changes']:,}",
-        f"Orders Newly Pending: {summary['pending_changes']:,}"
-    ])
     
     return "\n".join(report)
 
@@ -80,8 +97,17 @@ def save_report(report: str) -> None:
         report: Report text to save
     """
     ensure_directories_exist()
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    report_file = REPORT_DIR / f'reconciliation_report_{timestamp}.txt'
+    with open(report_file, 'w') as f:
+        f.write(report)
+    
+    # Also save to the standard location
     with open(REPORT_OUTPUT, 'w') as f:
         f.write(report)
+    
+    logger.info(f"Report saved to {report_file}")
+    logger.info(f"Report also saved to {REPORT_OUTPUT}")
 
 def generate_visualizations(analysis_df: pd.DataFrame, summary: Dict) -> Dict[str, go.Figure]:
     """
@@ -118,9 +144,17 @@ def generate_visualizations(analysis_df: pd.DataFrame, summary: Dict) -> Dict[st
     
     # Monthly Trends
     if 'source_file' in analysis_df.columns:
-        analysis_df['month_year'] = analysis_df['source_file'].apply(
-            lambda x: pd.to_datetime(x.split('-')[1:]).strftime('%Y-%m')
-        )
+        # Extract month and year from source file names
+        def extract_month_year(filename: str) -> str:
+            # Example filename: 'orders-02-2025.csv' -> '2025-02'
+            parts = filename.split('-')
+            if len(parts) >= 3:
+                month = parts[1]
+                year = parts[2].split('.')[0]
+                return f"{year}-{month}"
+            return "Unknown"
+        
+        analysis_df['month_year'] = analysis_df['source_file'].apply(extract_month_year)
         
         monthly_stats = analysis_df.groupby('month_year').agg({
             'order_release_id': 'count',
@@ -129,6 +163,11 @@ def generate_visualizations(analysis_df: pd.DataFrame, summary: Dict) -> Dict[st
         }).reset_index()
         
         monthly_stats.columns = ['Month', 'Total Orders', 'Net Profit/Loss', 'Settlement Rate']
+        
+        # Sort by month-year
+        monthly_stats['Month'] = pd.to_datetime(monthly_stats['Month'])
+        monthly_stats = monthly_stats.sort_values('Month')
+        monthly_stats['Month'] = monthly_stats['Month'].dt.strftime('%Y-%m')
         
         # Orders Trend
         fig = px.line(

@@ -93,37 +93,44 @@ def determine_order_status_and_financials(
     # Check if the order was cancelled
     if 'is_ship_rel' in order and order['is_ship_rel'] == 0:
         status = "Cancelled"
+        logger.debug(f"Order {order_id} marked as Cancelled (is_ship_rel=0)")
     else:
-        # Check for returns
-        has_returns = False
-        if 'return_creation_date' in order and pd.notna(order['return_creation_date']) and order['return_creation_date'] != '':
-            has_returns = True
-            order_returns = returns_df[returns_df['order_release_id'] == order_id]
-            if not order_returns.empty and 'total_actual_settlement' in order_returns.columns:
-                return_settlement = order_returns['total_actual_settlement'].sum()
+        # Check for returns by looking up order_id in returns DataFrame
+        order_returns = returns_df[returns_df['order_release_id'] == order_id]
+        has_returns = not order_returns.empty
         
         # Check for settlement
-        has_settlement = False
         order_settlement_data = settlement_df[settlement_df['order_release_id'] == order_id]
-        if not order_settlement_data.empty and 'total_actual_settlement' in order_settlement_data.columns:
-            has_settlement = True
+        has_settlement = not order_settlement_data.empty
+        
+        # Calculate settlements if available
+        if has_returns and 'total_actual_settlement' in order_returns.columns:
+            return_settlement = order_returns['total_actual_settlement'].sum()
+            logger.debug(f"Order {order_id} has return settlement: {return_settlement}")
+        
+        if has_settlement and 'total_actual_settlement' in order_settlement_data.columns:
             order_settlement = order_settlement_data['total_actual_settlement'].sum()
+            logger.debug(f"Order {order_id} has order settlement: {order_settlement}")
         
         # Determine status and calculate financials
         if has_returns:
             status = "Returned"
             profit_loss = order_settlement - return_settlement  # return_settlement is negative
+            logger.debug(f"Order {order_id} marked as Returned, profit_loss: {profit_loss}")
         elif has_settlement:
             status = "Completed - Settled"
             profit_loss = order_settlement
+            logger.debug(f"Order {order_id} marked as Completed - Settled, profit_loss: {profit_loss}")
         else:
             status = "Completed - Pending Settlement"
             profit_loss = 0.0
+            logger.debug(f"Order {order_id} marked as Completed - Pending Settlement")
     
     # Track status changes
     status_changed = False
     if previous_status is not None and previous_status != status:
         status_changed = True
+        logger.info(f"Order {order_id} status changed from {previous_status} to {status}")
     
     return {
         'status': status,
@@ -162,6 +169,10 @@ def get_order_analysis_summary(analysis_df: pd.DataFrame) -> Dict:
     total_return_settlement = analysis_df['return_settlement'].sum()
     total_order_settlement = analysis_df['order_settlement'].sum()
     
+    # Calculate pending settlement value
+    pending_orders_df = analysis_df[analysis_df['status'] == 'Completed - Pending Settlement']
+    pending_settlement_value = pending_orders_df['final_amount'].sum() if 'final_amount' in analysis_df.columns else 0
+    
     # Count status changes
     status_changes = analysis_df['status_changed_this_run'].sum()
     
@@ -183,6 +194,7 @@ def get_order_analysis_summary(analysis_df: pd.DataFrame) -> Dict:
         'return_rate': return_rate,
         'total_return_settlement': total_return_settlement,
         'total_order_settlement': total_order_settlement,
+        'pending_settlement_value': pending_settlement_value,
         'status_changes': status_changes,
         'settlement_changes': len(settlement_changes),
         'pending_changes': len(pending_changes),

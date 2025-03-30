@@ -1,0 +1,33 @@
+=== Order Reconciliation Report ===
+
+=== Order Counts ===
+Total Orders: 3995
+Cancelled Orders: 134 (3.35%)
+Returned Orders: 326 (8.16%)
+Completed and Settled Orders: 1551 (38.82%)
+Completed but Pending Settlement Orders: 1984 (49.66%)
+
+=== Financial Analysis ===
+Total Profit from Settled Orders: 926292.70
+Total Loss from Returned Orders: 228916.44
+Net Profit/Loss: 1155209.15
+
+=== Settlement Information ===
+Total Return Settlement Amount: ₹228,916.44
+Total Order Settlement Amount: ₹926,292.70
+Potential Settlement Value (Pending): ₹1,510,566.00
+Status Changes in This Run: 0
+Orders Newly Settled in This Run: 0
+Orders Newly Pending in This Run: 0
+
+=== Key Metrics ===
+Settlement Rate: 38.82%
+Return Rate: 8.16%
+Average Profit per Settled Order: 597.22
+Average Loss per Returned Order: 702.20
+
+=== Recommendations ===
+1. Monitor orders with status 'Completed - Pending Settlement' to ensure they get settled.
+2. Analyze orders with high losses to identify patterns and potential issues.
+3. Investigate return patterns to reduce return rates.
+4. Consider strategies to increase settlement rates for shipped orders.

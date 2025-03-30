@@ -4,7 +4,7 @@ Utility functions for the reconciliation application.
 import os
 import re
 import logging
-from typing import List, Dict, Set, Tuple, Optional
+from typing import List, Dict, Set, Optional
 import pandas as pd
 from pathlib import Path
 
@@ -16,18 +16,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Directory paths
-BASE_DIR = Path(__file__).parent.parent
+BASE_DIR = Path('reconciliation')
 DATA_DIR = BASE_DIR / 'data'
 OUTPUT_DIR = BASE_DIR / 'output'
-MASTER_DIR = OUTPUT_DIR / 'master'
 ANALYSIS_DIR = OUTPUT_DIR / 'analysis'
 REPORT_DIR = OUTPUT_DIR / 'reports'
 VISUALIZATION_DIR = OUTPUT_DIR / 'visualizations'
 
 # File paths
-ORDERS_MASTER = MASTER_DIR / 'orders_master.csv'
-RETURNS_MASTER = MASTER_DIR / 'returns_master.csv'
-SETTLEMENT_MASTER = MASTER_DIR / 'settlement_master.csv'
+ORDERS_MASTER = OUTPUT_DIR / 'orders_master.csv'
+RETURNS_MASTER = OUTPUT_DIR / 'returns_master.csv'
+SETTLEMENT_MASTER = OUTPUT_DIR / 'settlement_master.csv'
 ANALYSIS_OUTPUT = ANALYSIS_DIR / 'order_analysis.csv'
 REPORT_OUTPUT = REPORT_DIR / 'reconciliation_report.txt'
 ANOMALIES_OUTPUT = ANALYSIS_DIR / 'anomalies.csv'
@@ -40,54 +39,38 @@ SETTLEMENT_PATTERN = r'settlement-(\d{2})-(\d{4})\.(csv|xlsx)$'
 # Required columns for each file type based on analysis.py logic
 REQUIRED_COLUMNS = {
     'orders': {
-        # Core columns required for status determination
-        'order_release_id',     # Primary key for order identification
+        # Core columns required for status and financial calculations
+        'order release id',     # Primary key for order identification
         'is_ship_rel',          # Required for determining fulfilled orders
-        'return_creation_date', # Required for determining returned orders
-        
-        # Columns required for financial calculations
-        'final_amount',        # Required for profit/loss calculation
-        'total_mrp',          # Required for profit/loss calculation
-        
-        # Optional but useful columns for context/display
-        'order_status',       # For display and verification
-        'order_date',        # For chronological analysis
-        'store_order_id'     # For order grouping
+        'final amount',         # Required for profit/loss calculation
+        'total mrp'            # Required for profit/loss calculation
     },
     'returns': {
         # Core columns required for return processing
         'order_release_id',           # Primary key for order identification
-        'total_actual_settlement',    # Required for return settlement calculation
-        
-        # Optional but useful columns for context
-        'return_status',              # For display and verification
-        'return_reason'               # For analysis context
+        'total_actual_settlement'    # Required for return settlement calculation
     },
     'settlement': {
         # Core columns required for settlement processing
         'order_release_id',           # Primary key for order identification
-        'total_actual_settlement',    # Required for settlement calculation
-        
-        # Optional but useful columns for context
-        'settlement_date',            # For chronological tracking
-        'settlement_status'           # For status verification
+        'total_actual_settlement'    # Required for settlement calculation
     }
 }
 
 # Column renaming mapping for standardization
 COLUMN_RENAMES = {
-    "orders": {
-        "order release id": "order_release_id",
-        "final amount": "final_amount",
-        "total mrp": "total_mrp"
+    'orders': {
+        'order release id': 'order_release_id',
+        'final amount': 'final_amount',
+        'total mrp': 'total_mrp'
     },
-    "returns": {},  # Already using underscores
-    "settlement": {}  # Already using underscores
+    'returns': {},  # Already using underscores
+    'settlement': {}  # Already using underscores
 }
 
 def ensure_directories_exist() -> None:
     """Ensure all required directories exist."""
-    for directory in [DATA_DIR, MASTER_DIR, ANALYSIS_DIR, REPORT_DIR, VISUALIZATION_DIR]:
+    for directory in [DATA_DIR, ANALYSIS_DIR, REPORT_DIR, VISUALIZATION_DIR]:
         directory.mkdir(parents=True, exist_ok=True)
 
 def read_file(file_path: Path) -> pd.DataFrame:
@@ -123,8 +106,8 @@ def validate_file_columns(df: pd.DataFrame, file_type: str) -> bool:
     
     Note:
         This function checks for the core columns required by analysis.py.
-        Some columns are marked as required because they are essential for
-        the analysis logic, while others are optional but useful for context.
+        Only columns that are absolutely necessary for the analysis logic
+        are marked as required.
     """
     if file_type not in REQUIRED_COLUMNS:
         raise ValueError(f"Invalid file type: {file_type}")
