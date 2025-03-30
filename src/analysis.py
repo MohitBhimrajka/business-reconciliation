@@ -5,15 +5,17 @@ import pandas as pd
 import logging
 import numpy as np
 from typing import Dict, Tuple, List, Optional
+from datetime import datetime
 
-from utils import ensure_directories_exist, read_file
+from utils import ensure_directories_exist, read_file, ANALYSIS_OUTPUT
 
 logger = logging.getLogger(__name__)
 
 def analyze_orders(
     orders_df: pd.DataFrame,
     returns_df: pd.DataFrame,
-    settlement_df: pd.DataFrame
+    settlement_df: pd.DataFrame,
+    previous_analysis_df: Optional[pd.DataFrame] = None
 ) -> pd.DataFrame:
     """
     Analyze orders to determine their status and financial outcome.
@@ -22,6 +24,7 @@ def analyze_orders(
         orders_df: DataFrame containing order data
         returns_df: DataFrame containing return data
         settlement_df: DataFrame containing settlement data
+        previous_analysis_df: Previous analysis results (if available)
         
     Returns:
         DataFrame with order analysis results
@@ -30,111 +33,109 @@ def analyze_orders(
         logger.warning("No orders data available for analysis")
         return pd.DataFrame()
     
-    # Initialize the analysis results DataFrame with more columns
-    results = orders_df[['order_release_id']].copy()
+    # Create a copy of orders DataFrame for analysis
+    analysis_df = orders_df.copy()
     
-    # Add default values
-    results['status'] = 'Unknown'
-    results['profit_loss'] = np.nan
-    results['return_settlement'] = 0.0  # Amount we owe back for returns
-    results['order_settlement'] = 0.0   # Amount Myntra owes us
-    results['has_return_data'] = False
-    results['has_settlement_data'] = False
+    # Initialize new columns
+    analysis_df['status'] = None
+    analysis_df['profit_loss'] = None
+    analysis_df['return_settlement'] = None
+    analysis_df['order_settlement'] = None
+    analysis_df['status_changed_this_run'] = False
+    analysis_df['settlement_update_run_timestamp'] = None
     
-    # Check for return data
-    if not returns_df.empty:
-        results['has_return_data'] = results['order_release_id'].isin(returns_df['order_release_id'])
+    # Create previous status mapping if available
+    previous_status_map = {}
+    if previous_analysis_df is not None:
+        previous_status_map = dict(zip(
+            previous_analysis_df['order_release_id'],
+            previous_analysis_df['status']
+        ))
     
-    # Check for settlement data
-    if not settlement_df.empty:
-        results['has_settlement_data'] = results['order_release_id'].isin(settlement_df['order_release_id'])
-    
-    # Process each order
-    for index, order in results.iterrows():
-        order_id = order['order_release_id']
-        
-        # Get the full order record
-        order_record = orders_df[orders_df['order_release_id'] == order_id].iloc[0]
-        
-        # Get return and settlement data for this order
-        order_returns = returns_df[returns_df['order_release_id'] == order_id] if not returns_df.empty else pd.DataFrame()
-        order_settlement = settlement_df[settlement_df['order_release_id'] == order_id] if not settlement_df.empty else pd.DataFrame()
-        
-        # Determine the order status and financial outcome
-        status, profit_loss, return_settlement, order_settlement = determine_order_status_and_financials(
-            order_record,
-            order_returns,
-            order_settlement
+    # Analyze each order
+    for idx, order in analysis_df.iterrows():
+        previous_status = previous_status_map.get(order['order_release_id'])
+        results = determine_order_status_and_financials(
+            order, returns_df, settlement_df, previous_status
         )
         
-        # Update the results
-        results.at[index, 'status'] = status
-        results.at[index, 'profit_loss'] = profit_loss
-        results.at[index, 'return_settlement'] = return_settlement
-        results.at[index, 'order_settlement'] = order_settlement
+        # Update analysis DataFrame
+        for key, value in results.items():
+            analysis_df.at[idx, key] = value
     
-    # Clean up the results
-    if 'has_return_data' in results.columns:
-        results.drop(columns=['has_return_data'], inplace=True)
-    if 'has_settlement_data' in results.columns:
-        results.drop(columns=['has_settlement_data'], inplace=True)
-    
-    return results
+    return analysis_df
 
 def determine_order_status_and_financials(
     order: pd.Series,
-    returns: pd.DataFrame,
-    settlement: pd.DataFrame
-) -> Tuple[str, float, float, float]:
+    returns_df: pd.DataFrame,
+    settlement_df: pd.DataFrame,
+    previous_status: Optional[str] = None
+) -> Dict:
     """
-    Determine the status and financial outcome of an order.
+    Determine order status and calculate financials.
     
     Args:
-        order: Series containing order data
-        returns: DataFrame containing return data for the order
-        settlement: DataFrame containing settlement data for the order
-        
+        order: Order row from orders DataFrame
+        returns_df: Returns DataFrame
+        settlement_df: Settlement DataFrame
+        previous_status: Status from previous analysis (if available)
+    
     Returns:
-        Tuple of (status, profit_loss, return_settlement, order_settlement)
+        Dict containing status and financial calculations
     """
     order_id = order['order_release_id']
     
-    # Check if the order was cancelled
-    if 'is_ship_rel' in order and order['is_ship_rel'] == 0:
-        return "Cancelled", 0.0, 0.0, 0.0
+    # Check for returns
+    order_returns = returns_df[returns_df['order_release_id'] == order_id]
+    has_returns = not order_returns.empty
     
-    # Initialize financial amounts
-    return_settlement = 0.0  # Amount we owe back for returns
-    order_settlement = 0.0   # Amount Myntra owes us
-    profit_loss = 0.0
+    # Check for settlement
+    order_settlement = settlement_df[settlement_df['order_release_id'] == order_id]
+    has_settlement = not order_settlement.empty
     
-    # First check if the order appears in returns.csv
-    if not returns.empty:
-        # Get the return settlement amount (negative as it's what we owe back)
-        return_settlement = returns['total_actual_settlement'].sum()
-        if return_settlement < 0:  # If there's a return settlement
-            # Get the settlement amount (positive as it's what Myntra owes us)
-            if not settlement.empty and 'total_actual_settlement' in settlement.columns:
-                order_settlement = settlement['total_actual_settlement'].sum()
-            
-            # Calculate the final profit/loss
-            profit_loss = order_settlement + return_settlement  # return_settlement is already negative
-            
-            return "Returned", profit_loss, return_settlement, order_settlement
+    # Determine status
+    if order['order_status'] == 'Cancelled':
+        status = "Cancelled"
+    elif has_returns:
+        status = "Returned"
+    elif has_settlement:
+        status = "Completed - Settled"
+    else:
+        status = "Completed - Pending Settlement"
     
-    # If not returned, check if it was shipped
-    if 'is_ship_rel' in order and order['is_ship_rel'] == 1:
-        # Get the settlement amount (positive as it's what Myntra owes us)
-        if not settlement.empty and 'total_actual_settlement' in settlement.columns:
-            order_settlement = settlement['total_actual_settlement'].sum()
-        
-        if order_settlement > 0:
-            return "Completed - Settled", order_settlement, return_settlement, order_settlement
-        else:
-            return "Completed - Pending Settlement", 0.0, return_settlement, order_settlement
+    # Calculate financials
+    if status == "Cancelled":
+        profit_loss = 0
+        return_settlement = 0
+        order_settlement = 0
+    else:
+        # Calculate profit/loss based on status
+        if status == "Returned":
+            profit_loss = -order['final_amount']
+            return_settlement = order_returns['return_amount'].sum()
+            order_settlement = 0
+        elif status == "Completed - Settled":
+            profit_loss = order['final_amount'] - order['total_mrp']
+            return_settlement = 0
+            order_settlement = order_settlement['settlement_amount'].sum()
+        else:  # Pending Settlement
+            profit_loss = order['final_amount'] - order['total_mrp']
+            return_settlement = 0
+            order_settlement = 0
     
-    # If the order was shipped but no return or settlement data
-    return "Completed - Pending Settlement", 0.0, return_settlement, order_settlement
+    # Track status changes
+    status_changed = False
+    if previous_status is not None and previous_status != status:
+        status_changed = True
+    
+    return {
+        'status': status,
+        'profit_loss': profit_loss,
+        'return_settlement': return_settlement,
+        'order_settlement': order_settlement,
+        'status_changed_this_run': status_changed,
+        'settlement_update_run_timestamp': datetime.now().isoformat() if status_changed else None
+    }
 
 def get_order_analysis_summary(analysis_df: pd.DataFrame) -> Dict:
     """

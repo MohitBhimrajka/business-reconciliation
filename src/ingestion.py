@@ -1,9 +1,9 @@
 """
-Data ingestion and consolidation module.
+Data ingestion module for reconciliation application.
 """
 import os
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import pandas as pd
 from pathlib import Path
 
@@ -12,7 +12,7 @@ from utils import (
     ORDERS_PATTERN, RETURNS_PATTERN, SETTLEMENT_PATTERN,
     ORDERS_COLUMNS, RETURNS_COLUMNS, SETTLEMENT_COLUMNS,
     COLUMN_RENAMES, ORDERS_MASTER, RETURNS_MASTER, SETTLEMENT_MASTER,
-    extract_date_from_filename, get_file_identifier
+    extract_date_from_filename, get_file_identifier, validate_file_columns
 )
 
 logger = logging.getLogger(__name__)
@@ -45,172 +45,157 @@ def scan_directory(directory: str) -> Dict[str, List[str]]:
         "settlement": settlement_files
     }
 
-def process_orders_file(file_path: str) -> pd.DataFrame:
+def process_orders_file(file_path: Path) -> bool:
     """
-    Process an orders file and extract relevant columns.
+    Process an orders file and append to master file.
     
     Args:
         file_path: Path to the orders file
-        
-    Returns:
-        DataFrame with processed orders data
-    """
-    try:
-        df = read_file(file_path)
-        
-        # Extract only the specified columns if they exist
-        available_columns = [col for col in ORDERS_COLUMNS if col in df.columns]
-        df = df[available_columns].copy()
-        
-        # Rename order release id column to standardize
-        if 'order release id' in df.columns:
-            df.rename(columns={'order release id': 'order_release_id'}, inplace=True)
-        
-        # Add source file information
-        filename = os.path.basename(file_path)
-        month, year = extract_date_from_filename(filename, ORDERS_PATTERN)
-        df['source_file'] = get_file_identifier(month, year)
-        
-        # Ensure proper data types
-        if 'order_release_id' in df.columns:
-            df['order_release_id'] = df['order_release_id'].astype(str)
-        if 'is_ship_rel' in df.columns:
-            df['is_ship_rel'] = df['is_ship_rel'].astype(int)
-        
-        return df
-    except Exception as e:
-        logger.error(f"Error processing orders file {file_path}: {e}")
-        return pd.DataFrame()
-
-def process_returns_file(file_path: str) -> pd.DataFrame:
-    """
-    Process a returns file and extract relevant columns.
     
-    Args:
-        file_path: Path to the returns file
-        
-    Returns:
-        DataFrame with processed returns data
-    """
-    try:
-        df = read_file(file_path)
-        
-        # Extract only the specified columns if they exist
-        available_columns = [col for col in RETURNS_COLUMNS if col in df.columns]
-        df = df[available_columns].copy()
-        
-        # Rename columns according to standardization mapping
-        for old_col, new_col in COLUMN_RENAMES["returns"].items():
-            if old_col in df.columns:
-                df.rename(columns={old_col: new_col}, inplace=True)
-        
-        # Add source file information
-        filename = os.path.basename(file_path)
-        month, year = extract_date_from_filename(filename, RETURNS_PATTERN)
-        df['source_file'] = get_file_identifier(month, year)
-        
-        # Ensure proper data types
-        if 'order_release_id' in df.columns:
-            df['order_release_id'] = df['order_release_id'].astype(str)
-        
-        return df
-    except Exception as e:
-        logger.error(f"Error processing returns file {file_path}: {e}")
-        return pd.DataFrame()
-
-def process_settlement_file(file_path: str) -> pd.DataFrame:
-    """
-    Process a settlement file and extract relevant columns.
-    
-    Args:
-        file_path: Path to the settlement file
-        
-    Returns:
-        DataFrame with processed settlement data
-    """
-    try:
-        df = read_file(file_path)
-        
-        # Extract only the specified columns if they exist
-        available_columns = [col for col in SETTLEMENT_COLUMNS if col in df.columns]
-        df = df[available_columns].copy()
-        
-        # Rename columns according to standardization mapping
-        for old_col, new_col in COLUMN_RENAMES["settlement"].items():
-            if old_col in df.columns:
-                df.rename(columns={old_col: new_col}, inplace=True)
-        
-        # Add source file information
-        filename = os.path.basename(file_path)
-        month, year = extract_date_from_filename(filename, SETTLEMENT_PATTERN)
-        df['source_file'] = get_file_identifier(month, year)
-        
-        # Ensure proper data types
-        if 'order_release_id' in df.columns:
-            df['order_release_id'] = df['order_release_id'].astype(str)
-        
-        return df
-    except Exception as e:
-        logger.error(f"Error processing settlement file {file_path}: {e}")
-        return pd.DataFrame()
-
-def append_to_master(df: pd.DataFrame, master_file: str) -> bool:
-    """
-    Append new data to a master file, avoiding duplicates.
-    
-    Args:
-        df: DataFrame with new data
-        master_file: Path to the master file
-        
     Returns:
         True if successful, False otherwise
     """
-    if df.empty:
+    try:
+        # Read the file
+        df = read_file(file_path)
+        if df.empty:
+            logger.error(f"Empty file: {file_path}")
+            return False
+        
+        # Validate columns
+        if not validate_file_columns(df, 'orders'):
+            logger.error(f"Invalid columns in orders file: {file_path}")
+            return False
+        
+        # Add source file information
+        df['source_file'] = file_path.name
+        
+        # Append to master file
+        if ORDERS_MASTER.exists():
+            master_df = read_file(ORDERS_MASTER)
+            # Remove duplicates based on order_release_id and source_file
+            master_df = master_df[
+                ~(master_df['order_release_id'].isin(df['order_release_id']) &
+                  master_df['source_file'] == file_path.name)
+            ]
+            df = pd.concat([master_df, df], ignore_index=True)
+        
+        # Save to master file
+        df.to_csv(ORDERS_MASTER, index=False)
+        logger.info(f"Successfully processed orders file: {file_path}")
         return True
     
-    try:
-        # Create or append to the master file
-        if not os.path.exists(master_file):
-            df.to_csv(master_file, index=False)
-            logger.info(f"Created new master file: {master_file}")
-            return True
-        
-        # Read existing data
-        master_df = pd.read_csv(master_file)
-        
-        # Identify duplicates
-        if 'order_release_id' in df.columns and 'source_file' in df.columns:
-            # For each order_release_id and source_file combination, check if it already exists
-            merged = pd.merge(
-                df, master_df,
-                on=['order_release_id', 'source_file'],
-                how='left',
-                indicator=True
-            )
-            
-            # Keep only new records
-            new_records = merged[merged['_merge'] == 'left_only']
-            new_records = new_records.drop(columns=['_merge'])
-            
-            # Extract only the columns that should be in the new_records DataFrame
-            cols_to_keep = [col for col in df.columns if col in new_records.columns]
-            new_records = new_records[cols_to_keep]
-            
-            if new_records.empty:
-                logger.info(f"No new records to add to {master_file}")
-                return True
-            
-            # Append new records to the master file
-            new_records.to_csv(master_file, mode='a', header=False, index=False)
-            logger.info(f"Added {len(new_records)} new records to {master_file}")
-        else:
-            # If necessary columns are missing, just append all
-            df.to_csv(master_file, mode='a', header=False, index=False)
-            logger.info(f"Added {len(df)} records to {master_file} (without deduplication)")
-        
-        return True
     except Exception as e:
-        logger.error(f"Error appending to master file {master_file}: {e}")
+        logger.error(f"Error processing orders file {file_path}: {e}")
+        return False
+
+def process_returns_file(file_path: Path) -> bool:
+    """
+    Process a returns file and append to master file.
+    
+    Args:
+        file_path: Path to the returns file
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Read the file
+        df = read_file(file_path)
+        if df.empty:
+            logger.error(f"Empty file: {file_path}")
+            return False
+        
+        # Validate columns
+        if not validate_file_columns(df, 'returns'):
+            logger.error(f"Invalid columns in returns file: {file_path}")
+            return False
+        
+        # Add source file information
+        df['source_file'] = file_path.name
+        
+        # Append to master file
+        if RETURNS_MASTER.exists():
+            master_df = read_file(RETURNS_MASTER)
+            # Remove duplicates based on order_release_id and source_file
+            master_df = master_df[
+                ~(master_df['order_release_id'].isin(df['order_release_id']) &
+                  master_df['source_file'] == file_path.name)
+            ]
+            df = pd.concat([master_df, df], ignore_index=True)
+        
+        # Save to master file
+        df.to_csv(RETURNS_MASTER, index=False)
+        logger.info(f"Successfully processed returns file: {file_path}")
+        return True
+    
+    except Exception as e:
+        logger.error(f"Error processing returns file {file_path}: {e}")
+        return False
+
+def process_settlement_file(file_path: Path) -> bool:
+    """
+    Process a settlement file and append to master file.
+    
+    Args:
+        file_path: Path to the settlement file
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Read the file
+        df = read_file(file_path)
+        if df.empty:
+            logger.error(f"Empty file: {file_path}")
+            return False
+        
+        # Validate columns
+        if not validate_file_columns(df, 'settlement'):
+            logger.error(f"Invalid columns in settlement file: {file_path}")
+            return False
+        
+        # Add source file information
+        df['source_file'] = file_path.name
+        
+        # Append to master file
+        if SETTLEMENT_MASTER.exists():
+            master_df = read_file(SETTLEMENT_MASTER)
+            # Remove duplicates based on order_release_id and source_file
+            master_df = master_df[
+                ~(master_df['order_release_id'].isin(df['order_release_id']) &
+                  master_df['source_file'] == file_path.name)
+            ]
+            df = pd.concat([master_df, df], ignore_index=True)
+        
+        # Save to master file
+        df.to_csv(SETTLEMENT_MASTER, index=False)
+        logger.info(f"Successfully processed settlement file: {file_path}")
+        return True
+    
+    except Exception as e:
+        logger.error(f"Error processing settlement file {file_path}: {e}")
+        return False
+
+def process_file(file_path: Path, file_type: str) -> bool:
+    """
+    Process a file based on its type.
+    
+    Args:
+        file_path: Path to the file
+        file_type: Type of file (orders, returns, settlement)
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    if file_type == 'orders':
+        return process_orders_file(file_path)
+    elif file_type == 'returns':
+        return process_returns_file(file_path)
+    elif file_type == 'settlement':
+        return process_settlement_file(file_path)
+    else:
+        logger.error(f"Invalid file type: {file_type}")
         return False
 
 def ingest_data(data_directory: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -244,9 +229,7 @@ def ingest_data(data_directory: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Dat
             continue
         
         logger.info(f"Processing orders file: {filename}")
-        df = process_orders_file(file_path)
-        if not df.empty:
-            append_to_master(df, ORDERS_MASTER)
+        process_file(Path(file_path), 'orders')
     
     # Process returns files
     for file_path in files["returns"]:
@@ -259,9 +242,7 @@ def ingest_data(data_directory: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Dat
             continue
         
         logger.info(f"Processing returns file: {filename}")
-        df = process_returns_file(file_path)
-        if not df.empty:
-            append_to_master(df, RETURNS_MASTER)
+        process_file(Path(file_path), 'returns')
     
     # Process settlement files
     for file_path in files["settlement"]:
@@ -274,9 +255,7 @@ def ingest_data(data_directory: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Dat
             continue
         
         logger.info(f"Processing settlement file: {filename}")
-        df = process_settlement_file(file_path)
-        if not df.empty:
-            append_to_master(df, SETTLEMENT_MASTER)
+        process_file(Path(file_path), 'settlement')
     
     # Load and return the latest master data
     orders_df = pd.DataFrame()
