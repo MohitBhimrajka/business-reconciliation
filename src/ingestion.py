@@ -47,6 +47,7 @@ def scan_directory(directory: str) -> Dict[str, List[str]]:
 def process_orders_file(file_path: Path) -> None:
     """
     Process an orders file and update the orders master file.
+    Implements true append/update by source file tracking.
     
     Args:
         file_path: Path to the orders file
@@ -55,6 +56,10 @@ def process_orders_file(file_path: Path) -> None:
     orders_df = read_file(file_path)
     if not validate_file_columns(orders_df, 'orders'):
         raise ValueError(f"Invalid columns in orders file: {file_path}")
+    
+    # Add source file information
+    orders_df['source_file'] = file_path.name
+    orders_df['ingestion_timestamp'] = pd.Timestamp.now()
     
     # Standardize column names
     orders_df = orders_df.rename(columns={
@@ -84,11 +89,11 @@ def process_orders_file(file_path: Path) -> None:
     if 'return_creation_date' in orders_df.columns:
         orders_df['return_creation_date'] = pd.to_datetime(orders_df['return_creation_date'])
     
-    # Update master file
+    # Update master file with source file tracking
     if ORDERS_MASTER.exists():
         master_df = read_file(ORDERS_MASTER)
-        # Remove existing entries for these orders
-        master_df = master_df[~master_df['order_release_id'].isin(orders_df['order_release_id'])]
+        # Remove only records from the same source file
+        master_df = master_df[master_df['source_file'] != file_path.name]
         # Append new data
         master_df = pd.concat([master_df, orders_df], ignore_index=True)
     else:
@@ -96,10 +101,13 @@ def process_orders_file(file_path: Path) -> None:
     
     # Save updated master file
     master_df.to_csv(ORDERS_MASTER, index=False)
+    logger.info(f"Successfully processed orders file: {file_path.name}")
+    logger.info(f"Master file now contains {len(master_df)} records")
 
 def process_returns_file(file_path: Path) -> None:
     """
     Process a returns file and update the returns master file.
+    Implements true append/update by source file tracking.
     
     Args:
         file_path: Path to the returns file
@@ -109,15 +117,19 @@ def process_returns_file(file_path: Path) -> None:
     if not validate_file_columns(returns_df, 'returns'):
         raise ValueError(f"Invalid columns in returns file: {file_path}")
     
+    # Add source file information
+    returns_df['source_file'] = file_path.name
+    returns_df['ingestion_timestamp'] = pd.Timestamp.now()
+    
     # Convert numeric columns
     if 'total_actual_settlement' in returns_df.columns:
         returns_df['total_actual_settlement'] = pd.to_numeric(returns_df['total_actual_settlement'], errors='coerce')
     
-    # Update master file
+    # Update master file with source file tracking
     if RETURNS_MASTER.exists():
         master_df = read_file(RETURNS_MASTER)
-        # Remove existing entries for these returns
-        master_df = master_df[~master_df['order_release_id'].isin(returns_df['order_release_id'])]
+        # Remove only records from the same source file
+        master_df = master_df[master_df['source_file'] != file_path.name]
         # Append new data
         master_df = pd.concat([master_df, returns_df], ignore_index=True)
     else:
@@ -125,10 +137,13 @@ def process_returns_file(file_path: Path) -> None:
     
     # Save updated master file
     master_df.to_csv(RETURNS_MASTER, index=False)
+    logger.info(f"Successfully processed returns file: {file_path.name}")
+    logger.info(f"Master file now contains {len(master_df)} records")
 
 def process_settlement_file(file_path: Path) -> None:
     """
     Process a settlement file and update the settlement master file.
+    Implements true append/update by source file tracking.
     
     Args:
         file_path: Path to the settlement file
@@ -138,6 +153,10 @@ def process_settlement_file(file_path: Path) -> None:
     if not validate_file_columns(settlement_df, 'settlement'):
         raise ValueError(f"Invalid columns in settlement file: {file_path}")
     
+    # Add source file information
+    settlement_df['source_file'] = file_path.name
+    settlement_df['ingestion_timestamp'] = pd.Timestamp.now()
+    
     # Convert numeric columns
     if 'total_actual_settlement' in settlement_df.columns:
         settlement_df['total_actual_settlement'] = pd.to_numeric(settlement_df['total_actual_settlement'], errors='coerce')
@@ -146,11 +165,11 @@ def process_settlement_file(file_path: Path) -> None:
     if 'settlement_date' in settlement_df.columns:
         settlement_df['settlement_date'] = pd.to_datetime(settlement_df['settlement_date'])
     
-    # Update master file
+    # Update master file with source file tracking
     if SETTLEMENT_MASTER.exists():
         master_df = read_file(SETTLEMENT_MASTER)
-        # Remove existing entries for these settlements
-        master_df = master_df[~master_df['order_release_id'].isin(settlement_df['order_release_id'])]
+        # Remove only records from the same source file
+        master_df = master_df[master_df['source_file'] != file_path.name]
         # Append new data
         master_df = pd.concat([master_df, settlement_df], ignore_index=True)
     else:
@@ -158,6 +177,8 @@ def process_settlement_file(file_path: Path) -> None:
     
     # Save updated master file
     master_df.to_csv(SETTLEMENT_MASTER, index=False)
+    logger.info(f"Successfully processed settlement file: {file_path.name}")
+    logger.info(f"Master file now contains {len(master_df)} records")
 
 def process_file(file_path: Path, file_type: str) -> bool:
     """
