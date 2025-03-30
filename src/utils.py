@@ -37,54 +37,37 @@ ORDERS_PATTERN = r'orders-(\d{2})-(\d{4})\.(csv|xlsx)$'
 RETURNS_PATTERN = r'returns-(\d{2})-(\d{4})\.(csv|xlsx)$'
 SETTLEMENT_PATTERN = r'settlement-(\d{2})-(\d{4})\.(csv|xlsx)$'
 
-# Column names for each file type
-ORDERS_COLUMNS = [
-    'order release id',  # Note: with spaces
-    'order line id',
-    'order status',
-    'final amount',
-    'total mrp',
-    'discount',
-    'coupon discount',
-    'shipping charge',
-    'gift charge',
-    'tax recovery',
-    'is_ship_rel'
-]
-
-RETURNS_COLUMNS = [
-    'order_release_id',  # Note: with underscore
-    'order_line_id',
-    'return_type',
-    'return_date',
-    'packing_date',
-    'delivery_date',
-    'customer_paid_amount',
-    'postpaid_amount',
-    'prepaid_amount',
-    'mrp',
-    'total_discount_amount',
-    'total_settlement',
-    'total_actual_settlement',
-    'amount_pending_settlement'
-]
-
-SETTLEMENT_COLUMNS = [
-    'order_release_id',  # Note: with underscore
-    'order_line_id',
-    'return_type',
-    'return_date',
-    'packing_date',
-    'delivery_date',
-    'customer_paid_amount',
-    'postpaid_amount',
-    'prepaid_amount',
-    'mrp',
-    'total_discount_amount',
-    'total_expected_settlement',
-    'total_actual_settlement',
-    'amount_pending_settlement'
-]
+# Required columns for each file type
+REQUIRED_COLUMNS = {
+    'orders': {
+        'order_release_id',
+        'order_status',
+        'final_amount',
+        'total_mrp',
+        'discount',
+        'coupon_discount',
+        'shipping_charge',
+        'gift_charge',
+        'tax_recovery',
+        'is_ship_rel',  # Required for determining fulfilled orders
+        'order_date',   # For chronological analysis
+        'store_order_id'  # For order grouping
+    },
+    'returns': {
+        'order_release_id',
+        'return_amount',
+        'return_creation_date',  # Required for return status
+        'return_status',
+        'return_reason'
+    },
+    'settlement': {
+        'order_release_id',
+        'settlement_amount',
+        'total_actual_settlement',  # Required for settlement calculation
+        'settlement_date',
+        'settlement_status'
+    }
+}
 
 # Column renaming mapping for standardization
 COLUMN_RENAMES = {
@@ -170,25 +153,29 @@ def get_file_identifier(file_type: str, month: str, year: str) -> str:
 
 def validate_file_columns(df: pd.DataFrame, file_type: str) -> bool:
     """
-    Validate if DataFrame has required columns for file type.
+    Validate that the DataFrame has all required columns for the given file type.
     
     Args:
         df: DataFrame to validate
-        file_type: Type of file (orders, returns, settlement)
+        file_type: Type of file ('orders', 'returns', or 'settlement')
     
     Returns:
-        True if valid, False otherwise
+        True if all required columns are present, False otherwise
     """
-    required_columns = {
-        'orders': ['order_release_id', 'order_status', 'final_amount', 'total_mrp'],
-        'returns': ['order_release_id', 'return_amount'],
-        'settlement': ['order_release_id', 'settlement_amount']
-    }
+    if file_type not in REQUIRED_COLUMNS:
+        raise ValueError(f"Invalid file type: {file_type}")
     
-    if file_type not in required_columns:
+    df_columns = set(df.columns)
+    required_columns = REQUIRED_COLUMNS[file_type]
+    
+    # Check if all required columns are present
+    missing_columns = required_columns - df_columns
+    
+    if missing_columns:
+        print(f"Missing required columns for {file_type}: {missing_columns}")
         return False
     
-    return all(col in df.columns for col in required_columns[file_type])
+    return True
 
 def format_currency(value: float) -> str:
     """

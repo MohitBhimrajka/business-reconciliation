@@ -45,137 +45,124 @@ def scan_directory(directory: str) -> Dict[str, List[str]]:
         "settlement": settlement_files
     }
 
-def process_orders_file(file_path: Path) -> bool:
+def process_orders_file(file_path: Path) -> None:
     """
-    Process an orders file and append to master file.
+    Process an orders file and update the orders master file.
     
     Args:
         file_path: Path to the orders file
-    
-    Returns:
-        True if successful, False otherwise
     """
-    try:
-        # Read the file
-        df = read_file(file_path)
-        if df.empty:
-            logger.error(f"Empty file: {file_path}")
-            return False
-        
-        # Validate columns
-        if not validate_file_columns(df, 'orders'):
-            logger.error(f"Invalid columns in orders file: {file_path}")
-            return False
-        
-        # Add source file information
-        df['source_file'] = file_path.name
-        
-        # Append to master file
-        if ORDERS_MASTER.exists():
-            master_df = read_file(ORDERS_MASTER)
-            # Remove duplicates based on order_release_id and source_file
-            master_df = master_df[
-                ~(master_df['order_release_id'].isin(df['order_release_id']) &
-                  master_df['source_file'] == file_path.name)
-            ]
-            df = pd.concat([master_df, df], ignore_index=True)
-        
-        # Save to master file
-        df.to_csv(ORDERS_MASTER, index=False)
-        logger.info(f"Successfully processed orders file: {file_path}")
-        return True
+    # Read and validate the file
+    orders_df = read_file(file_path)
+    if not validate_file_columns(orders_df, 'orders'):
+        raise ValueError(f"Invalid columns in orders file: {file_path}")
     
-    except Exception as e:
-        logger.error(f"Error processing orders file {file_path}: {e}")
-        return False
+    # Standardize column names
+    orders_df = orders_df.rename(columns={
+        'order release id': 'order_release_id',
+        'order line id': 'order_line_id',
+        'order status': 'order_status',
+        'final amount': 'final_amount',
+        'total mrp': 'total_mrp',
+        'coupon discount': 'coupon_discount',
+        'shipping charge': 'shipping_charge',
+        'gift charge': 'gift_charge',
+        'tax recovery': 'tax_recovery'
+    })
+    
+    # Convert numeric columns
+    numeric_columns = [
+        'final_amount', 'total_mrp', 'discount', 'coupon_discount',
+        'shipping_charge', 'gift_charge', 'tax_recovery'
+    ]
+    for col in numeric_columns:
+        if col in orders_df.columns:
+            orders_df[col] = pd.to_numeric(orders_df[col], errors='coerce')
+    
+    # Convert date columns
+    if 'order_date' in orders_df.columns:
+        orders_df['order_date'] = pd.to_datetime(orders_df['order_date'])
+    
+    # Update master file
+    if ORDERS_MASTER.exists():
+        master_df = read_file(ORDERS_MASTER)
+        # Remove existing entries for these orders
+        master_df = master_df[~master_df['order_release_id'].isin(orders_df['order_release_id'])]
+        # Append new data
+        master_df = pd.concat([master_df, orders_df], ignore_index=True)
+    else:
+        master_df = orders_df
+    
+    # Save updated master file
+    master_df.to_csv(ORDERS_MASTER, index=False)
 
-def process_returns_file(file_path: Path) -> bool:
+def process_returns_file(file_path: Path) -> None:
     """
-    Process a returns file and append to master file.
+    Process a returns file and update the returns master file.
     
     Args:
         file_path: Path to the returns file
-    
-    Returns:
-        True if successful, False otherwise
     """
-    try:
-        # Read the file
-        df = read_file(file_path)
-        if df.empty:
-            logger.error(f"Empty file: {file_path}")
-            return False
-        
-        # Validate columns
-        if not validate_file_columns(df, 'returns'):
-            logger.error(f"Invalid columns in returns file: {file_path}")
-            return False
-        
-        # Add source file information
-        df['source_file'] = file_path.name
-        
-        # Append to master file
-        if RETURNS_MASTER.exists():
-            master_df = read_file(RETURNS_MASTER)
-            # Remove duplicates based on order_release_id and source_file
-            master_df = master_df[
-                ~(master_df['order_release_id'].isin(df['order_release_id']) &
-                  master_df['source_file'] == file_path.name)
-            ]
-            df = pd.concat([master_df, df], ignore_index=True)
-        
-        # Save to master file
-        df.to_csv(RETURNS_MASTER, index=False)
-        logger.info(f"Successfully processed returns file: {file_path}")
-        return True
+    # Read and validate the file
+    returns_df = read_file(file_path)
+    if not validate_file_columns(returns_df, 'returns'):
+        raise ValueError(f"Invalid columns in returns file: {file_path}")
     
-    except Exception as e:
-        logger.error(f"Error processing returns file {file_path}: {e}")
-        return False
+    # Convert numeric columns
+    if 'return_amount' in returns_df.columns:
+        returns_df['return_amount'] = pd.to_numeric(returns_df['return_amount'], errors='coerce')
+    
+    # Convert date columns
+    if 'return_creation_date' in returns_df.columns:
+        returns_df['return_creation_date'] = pd.to_datetime(returns_df['return_creation_date'])
+    
+    # Update master file
+    if RETURNS_MASTER.exists():
+        master_df = read_file(RETURNS_MASTER)
+        # Remove existing entries for these returns
+        master_df = master_df[~master_df['order_release_id'].isin(returns_df['order_release_id'])]
+        # Append new data
+        master_df = pd.concat([master_df, returns_df], ignore_index=True)
+    else:
+        master_df = returns_df
+    
+    # Save updated master file
+    master_df.to_csv(RETURNS_MASTER, index=False)
 
-def process_settlement_file(file_path: Path) -> bool:
+def process_settlement_file(file_path: Path) -> None:
     """
-    Process a settlement file and append to master file.
+    Process a settlement file and update the settlement master file.
     
     Args:
         file_path: Path to the settlement file
-    
-    Returns:
-        True if successful, False otherwise
     """
-    try:
-        # Read the file
-        df = read_file(file_path)
-        if df.empty:
-            logger.error(f"Empty file: {file_path}")
-            return False
-        
-        # Validate columns
-        if not validate_file_columns(df, 'settlement'):
-            logger.error(f"Invalid columns in settlement file: {file_path}")
-            return False
-        
-        # Add source file information
-        df['source_file'] = file_path.name
-        
-        # Append to master file
-        if SETTLEMENT_MASTER.exists():
-            master_df = read_file(SETTLEMENT_MASTER)
-            # Remove duplicates based on order_release_id and source_file
-            master_df = master_df[
-                ~(master_df['order_release_id'].isin(df['order_release_id']) &
-                  master_df['source_file'] == file_path.name)
-            ]
-            df = pd.concat([master_df, df], ignore_index=True)
-        
-        # Save to master file
-        df.to_csv(SETTLEMENT_MASTER, index=False)
-        logger.info(f"Successfully processed settlement file: {file_path}")
-        return True
+    # Read and validate the file
+    settlement_df = read_file(file_path)
+    if not validate_file_columns(settlement_df, 'settlement'):
+        raise ValueError(f"Invalid columns in settlement file: {file_path}")
     
-    except Exception as e:
-        logger.error(f"Error processing settlement file {file_path}: {e}")
-        return False
+    # Convert numeric columns
+    numeric_columns = ['settlement_amount', 'total_actual_settlement']
+    for col in numeric_columns:
+        if col in settlement_df.columns:
+            settlement_df[col] = pd.to_numeric(settlement_df[col], errors='coerce')
+    
+    # Convert date columns
+    if 'settlement_date' in settlement_df.columns:
+        settlement_df['settlement_date'] = pd.to_datetime(settlement_df['settlement_date'])
+    
+    # Update master file
+    if SETTLEMENT_MASTER.exists():
+        master_df = read_file(SETTLEMENT_MASTER)
+        # Remove existing entries for these settlements
+        master_df = master_df[~master_df['order_release_id'].isin(settlement_df['order_release_id'])]
+        # Append new data
+        master_df = pd.concat([master_df, settlement_df], ignore_index=True)
+    else:
+        master_df = settlement_df
+    
+    # Save updated master file
+    master_df.to_csv(SETTLEMENT_MASTER, index=False)
 
 def process_file(file_path: Path, file_type: str) -> bool:
     """
@@ -189,11 +176,14 @@ def process_file(file_path: Path, file_type: str) -> bool:
         True if successful, False otherwise
     """
     if file_type == 'orders':
-        return process_orders_file(file_path)
+        process_orders_file(file_path)
+        return True
     elif file_type == 'returns':
-        return process_returns_file(file_path)
+        process_returns_file(file_path)
+        return True
     elif file_type == 'settlement':
-        return process_settlement_file(file_path)
+        process_settlement_file(file_path)
+        return True
     else:
         logger.error(f"Invalid file type: {file_type}")
         return False
