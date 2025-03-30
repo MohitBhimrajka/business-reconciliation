@@ -37,42 +37,49 @@ ORDERS_PATTERN = r'orders-(\d{2})-(\d{4})\.(csv|xlsx)$'
 RETURNS_PATTERN = r'returns-(\d{2})-(\d{4})\.(csv|xlsx)$'
 SETTLEMENT_PATTERN = r'settlement-(\d{2})-(\d{4})\.(csv|xlsx)$'
 
-# Required columns for each file type
+# Required columns for each file type based on analysis.py logic
 REQUIRED_COLUMNS = {
     'orders': {
-        'order_release_id',
-        'order_status',
-        'final_amount',
-        'total_mrp',
-        'discount',
-        'coupon_discount',
-        'shipping_charge',
-        'gift_charge',
-        'tax_recovery',
-        'is_ship_rel',  # Required for determining fulfilled orders
-        'order_date',   # For chronological analysis
-        'store_order_id'  # For order grouping
+        # Core columns required for status determination
+        'order_release_id',     # Primary key for order identification
+        'is_ship_rel',          # Required for determining fulfilled orders
+        'return_creation_date', # Required for determining returned orders
+        
+        # Columns required for financial calculations
+        'final_amount',        # Required for profit/loss calculation
+        'total_mrp',          # Required for profit/loss calculation
+        
+        # Optional but useful columns for context/display
+        'order_status',       # For display and verification
+        'order_date',        # For chronological analysis
+        'store_order_id'     # For order grouping
     },
     'returns': {
-        'order_release_id',
-        'return_amount',
-        'return_creation_date',  # Required for return status
-        'return_status',
-        'return_reason'
+        # Core columns required for return processing
+        'order_release_id',           # Primary key for order identification
+        'total_actual_settlement',    # Required for return settlement calculation
+        
+        # Optional but useful columns for context
+        'return_status',              # For display and verification
+        'return_reason'               # For analysis context
     },
     'settlement': {
-        'order_release_id',
-        'settlement_amount',
-        'total_actual_settlement',  # Required for settlement calculation
-        'settlement_date',
-        'settlement_status'
+        # Core columns required for settlement processing
+        'order_release_id',           # Primary key for order identification
+        'total_actual_settlement',    # Required for settlement calculation
+        
+        # Optional but useful columns for context
+        'settlement_date',            # For chronological tracking
+        'settlement_status'           # For status verification
     }
 }
 
 # Column renaming mapping for standardization
 COLUMN_RENAMES = {
     "orders": {
-        "order release id": "order_release_id"  # Standardize to underscore
+        "order release id": "order_release_id",
+        "final amount": "final_amount",
+        "total mrp": "total_mrp"
     },
     "returns": {},  # Already using underscores
     "settlement": {}  # Already using underscores
@@ -102,6 +109,37 @@ def read_file(file_path: Path) -> pd.DataFrame:
         return pd.read_excel(file_path)
     else:
         raise ValueError(f"Unsupported file type: {file_path.suffix}")
+
+def validate_file_columns(df: pd.DataFrame, file_type: str) -> bool:
+    """
+    Validate that the DataFrame has all required columns for the given file type.
+    
+    Args:
+        df: DataFrame to validate
+        file_type: Type of file ('orders', 'returns', or 'settlement')
+    
+    Returns:
+        True if all required columns are present, False otherwise
+    
+    Note:
+        This function checks for the core columns required by analysis.py.
+        Some columns are marked as required because they are essential for
+        the analysis logic, while others are optional but useful for context.
+    """
+    if file_type not in REQUIRED_COLUMNS:
+        raise ValueError(f"Invalid file type: {file_type}")
+    
+    df_columns = set(df.columns)
+    required_columns = REQUIRED_COLUMNS[file_type]
+    
+    # Check if all required columns are present
+    missing_columns = required_columns - df_columns
+    
+    if missing_columns:
+        logger.error(f"Missing required columns for {file_type}: {missing_columns}")
+        return False
+    
+    return True
 
 def get_processed_files() -> List[Path]:
     """
@@ -150,32 +188,6 @@ def get_file_identifier(file_type: str, month: str, year: str) -> str:
         Standardized filename
     """
     return f"{file_type}-{month}-{year}.csv"
-
-def validate_file_columns(df: pd.DataFrame, file_type: str) -> bool:
-    """
-    Validate that the DataFrame has all required columns for the given file type.
-    
-    Args:
-        df: DataFrame to validate
-        file_type: Type of file ('orders', 'returns', or 'settlement')
-    
-    Returns:
-        True if all required columns are present, False otherwise
-    """
-    if file_type not in REQUIRED_COLUMNS:
-        raise ValueError(f"Invalid file type: {file_type}")
-    
-    df_columns = set(df.columns)
-    required_columns = REQUIRED_COLUMNS[file_type]
-    
-    # Check if all required columns are present
-    missing_columns = required_columns - df_columns
-    
-    if missing_columns:
-        print(f"Missing required columns for {file_type}: {missing_columns}")
-        return False
-    
-    return True
 
 def format_currency(value: float) -> str:
     """

@@ -3,16 +3,15 @@ Data ingestion module for reconciliation application.
 """
 import os
 import logging
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List
 import pandas as pd
 from pathlib import Path
 
 from utils import (
-    ensure_directories_exist, read_file, get_processed_files,
+    ensure_directories_exist, read_file,
     ORDERS_PATTERN, RETURNS_PATTERN, SETTLEMENT_PATTERN,
-    ORDERS_COLUMNS, RETURNS_COLUMNS, SETTLEMENT_COLUMNS,
-    COLUMN_RENAMES, ORDERS_MASTER, RETURNS_MASTER, SETTLEMENT_MASTER,
-    extract_date_from_filename, get_file_identifier, validate_file_columns
+    ORDERS_MASTER, RETURNS_MASTER, SETTLEMENT_MASTER,
+    validate_file_columns
 )
 
 logger = logging.getLogger(__name__)
@@ -82,6 +81,8 @@ def process_orders_file(file_path: Path) -> None:
     # Convert date columns
     if 'order_date' in orders_df.columns:
         orders_df['order_date'] = pd.to_datetime(orders_df['order_date'])
+    if 'return_creation_date' in orders_df.columns:
+        orders_df['return_creation_date'] = pd.to_datetime(orders_df['return_creation_date'])
     
     # Update master file
     if ORDERS_MASTER.exists():
@@ -109,12 +110,8 @@ def process_returns_file(file_path: Path) -> None:
         raise ValueError(f"Invalid columns in returns file: {file_path}")
     
     # Convert numeric columns
-    if 'return_amount' in returns_df.columns:
-        returns_df['return_amount'] = pd.to_numeric(returns_df['return_amount'], errors='coerce')
-    
-    # Convert date columns
-    if 'return_creation_date' in returns_df.columns:
-        returns_df['return_creation_date'] = pd.to_datetime(returns_df['return_creation_date'])
+    if 'total_actual_settlement' in returns_df.columns:
+        returns_df['total_actual_settlement'] = pd.to_numeric(returns_df['total_actual_settlement'], errors='coerce')
     
     # Update master file
     if RETURNS_MASTER.exists():
@@ -142,10 +139,8 @@ def process_settlement_file(file_path: Path) -> None:
         raise ValueError(f"Invalid columns in settlement file: {file_path}")
     
     # Convert numeric columns
-    numeric_columns = ['settlement_amount', 'total_actual_settlement']
-    for col in numeric_columns:
-        if col in settlement_df.columns:
-            settlement_df[col] = pd.to_numeric(settlement_df[col], errors='coerce')
+    if 'total_actual_settlement' in settlement_df.columns:
+        settlement_df['total_actual_settlement'] = pd.to_numeric(settlement_df['total_actual_settlement'], errors='coerce')
     
     # Convert date columns
     if 'settlement_date' in settlement_df.columns:
@@ -175,90 +170,17 @@ def process_file(file_path: Path, file_type: str) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    if file_type == 'orders':
-        process_orders_file(file_path)
+    try:
+        if file_type == 'orders':
+            process_orders_file(file_path)
+        elif file_type == 'returns':
+            process_returns_file(file_path)
+        elif file_type == 'settlement':
+            process_settlement_file(file_path)
+        else:
+            logger.error(f"Invalid file type: {file_type}")
+            return False
         return True
-    elif file_type == 'returns':
-        process_returns_file(file_path)
-        return True
-    elif file_type == 'settlement':
-        process_settlement_file(file_path)
-        return True
-    else:
-        logger.error(f"Invalid file type: {file_type}")
-        return False
-
-def ingest_data(data_directory: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """
-    Ingest data from the specified directory and consolidate into master files.
-    
-    Args:
-        data_directory: Directory containing the data files
-        
-    Returns:
-        Tuple of DataFrames (orders, returns, settlement)
-    """
-    ensure_directories_exist()
-    
-    # Scan directory for files
-    files = scan_directory(data_directory)
-    
-    # Get already processed files
-    processed_orders = get_processed_files(ORDERS_MASTER)
-    processed_returns = get_processed_files(RETURNS_MASTER)
-    processed_settlements = get_processed_files(SETTLEMENT_MASTER)
-    
-    # Process orders files
-    for file_path in files["orders"]:
-        filename = os.path.basename(file_path)
-        month, year = extract_date_from_filename(filename, ORDERS_PATTERN)
-        file_id = get_file_identifier(month, year)
-        
-        if file_id in processed_orders:
-            logger.info(f"Orders file already processed: {filename}")
-            continue
-        
-        logger.info(f"Processing orders file: {filename}")
-        process_file(Path(file_path), 'orders')
-    
-    # Process returns files
-    for file_path in files["returns"]:
-        filename = os.path.basename(file_path)
-        month, year = extract_date_from_filename(filename, RETURNS_PATTERN)
-        file_id = get_file_identifier(month, year)
-        
-        if file_id in processed_returns:
-            logger.info(f"Returns file already processed: {filename}")
-            continue
-        
-        logger.info(f"Processing returns file: {filename}")
-        process_file(Path(file_path), 'returns')
-    
-    # Process settlement files
-    for file_path in files["settlement"]:
-        filename = os.path.basename(file_path)
-        month, year = extract_date_from_filename(filename, SETTLEMENT_PATTERN)
-        file_id = get_file_identifier(month, year)
-        
-        if file_id in processed_settlements:
-            logger.info(f"Settlement file already processed: {filename}")
-            continue
-        
-        logger.info(f"Processing settlement file: {filename}")
-        process_file(Path(file_path), 'settlement')
-    
-    # Load and return the latest master data
-    orders_df = pd.DataFrame()
-    returns_df = pd.DataFrame()
-    settlement_df = pd.DataFrame()
-    
-    if os.path.exists(ORDERS_MASTER):
-        orders_df = pd.read_csv(ORDERS_MASTER)
-    
-    if os.path.exists(RETURNS_MASTER):
-        returns_df = pd.read_csv(RETURNS_MASTER)
-    
-    if os.path.exists(SETTLEMENT_MASTER):
-        settlement_df = pd.read_csv(SETTLEMENT_MASTER)
-    
-    return orders_df, returns_df, settlement_df 
+    except Exception as e:
+        logger.error(f"Error processing {file_type} file {file_path}: {e}")
+        return False 
