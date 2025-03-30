@@ -65,7 +65,9 @@ def generate_report(summary: Dict) -> str:
         "-" * 50,
         f"Total Return Settlement: ₹{summary['total_return_settlement']:,.2f}",
         f"Total Order Settlement: ₹{summary['total_order_settlement']:,.2f}",
-        f"Status Changes This Run: {summary['status_changes']:,}"
+        f"Status Changes This Run: {summary['status_changes']:,}",
+        f"Orders Settled This Run: {summary['settlement_changes']:,}",
+        f"Orders Newly Pending: {summary['pending_changes']:,}"
     ])
     
     return "\n".join(report)
@@ -81,15 +83,18 @@ def save_report(report: str) -> None:
     with open(REPORT_OUTPUT, 'w') as f:
         f.write(report)
 
-def generate_visualizations(analysis_df: pd.DataFrame, summary: Dict) -> None:
+def generate_visualizations(analysis_df: pd.DataFrame, summary: Dict) -> Dict[str, go.Figure]:
     """
     Generate interactive visualizations using Plotly.
     
     Args:
         analysis_df: Analysis results DataFrame
         summary: Analysis summary dictionary
+    
+    Returns:
+        Dictionary mapping visualization names to Plotly figures
     """
-    ensure_directories_exist()
+    figures = {}
     
     # Order Status Distribution
     status_counts = analysis_df['status'].value_counts()
@@ -98,7 +103,7 @@ def generate_visualizations(analysis_df: pd.DataFrame, summary: Dict) -> None:
         names=status_counts.index,
         title="Order Status Distribution"
     )
-    fig.write_html(VISUALIZATION_DIR / "status_distribution.html")
+    figures['status_distribution'] = fig
     
     # Profit/Loss Distribution
     profit_loss_data = analysis_df[analysis_df['profit_loss'].notna()]
@@ -109,7 +114,7 @@ def generate_visualizations(analysis_df: pd.DataFrame, summary: Dict) -> None:
         nbins=50
     )
     fig.add_vline(x=0, line_dash="dash", line_color="red")
-    fig.write_html(VISUALIZATION_DIR / "profit_loss_distribution.html")
+    figures['profit_loss_distribution'] = fig
     
     # Monthly Trends
     if 'source_file' in analysis_df.columns:
@@ -132,7 +137,7 @@ def generate_visualizations(analysis_df: pd.DataFrame, summary: Dict) -> None:
             y='Total Orders',
             title="Monthly Orders Trend"
         )
-        fig.write_html(VISUALIZATION_DIR / "monthly_orders_trend.html")
+        figures['monthly_orders_trend'] = fig
         
         # Profit/Loss Trend
         fig = px.line(
@@ -142,7 +147,7 @@ def generate_visualizations(analysis_df: pd.DataFrame, summary: Dict) -> None:
             title="Monthly Profit/Loss Trend"
         )
         fig.add_hline(y=0, line_dash="dash", line_color="red")
-        fig.write_html(VISUALIZATION_DIR / "monthly_profit_loss_trend.html")
+        figures['monthly_profit_loss_trend'] = fig
         
         # Settlement Rate Trend
         fig = px.line(
@@ -151,7 +156,30 @@ def generate_visualizations(analysis_df: pd.DataFrame, summary: Dict) -> None:
             y='Settlement Rate',
             title="Monthly Settlement Rate Trend"
         )
-        fig.write_html(VISUALIZATION_DIR / "monthly_settlement_rate_trend.html")
+        figures['monthly_settlement_rate_trend'] = fig
+    
+    # Settlement Changes
+    if 'status_changed_this_run' in analysis_df.columns:
+        settlement_changes = analysis_df[
+            (analysis_df['status_changed_this_run']) &
+            (analysis_df['status'] == 'Completed - Settled')
+        ]
+        
+        if not settlement_changes.empty:
+            fig = px.bar(
+                settlement_changes,
+                x='settlement_update_run_timestamp',
+                y='profit_loss',
+                title="Settlement Changes in Last Run",
+                labels={
+                    'settlement_update_run_timestamp': 'Settlement Date',
+                    'profit_loss': 'Profit/Loss'
+                }
+            )
+            fig.add_hline(y=0, line_dash="dash", line_color="red")
+            figures['settlement_changes'] = fig
+    
+    return figures
 
 def identify_anomalies(
     analysis_df: pd.DataFrame,
