@@ -1,0 +1,25 @@
+=== Order Reconciliation Report ===
+
+=== Order Counts ===
+Total Orders: 3995
+Cancelled Orders: 134 (3.35%)
+Returned Orders: 326 (8.16%)
+Completed and Settled Orders: 1551 (38.82%)
+Completed but Pending Settlement Orders: 1984 (49.66%)
+
+=== Financial Analysis ===
+Total Profit from Settled Orders: 763763.25
+Total Loss from Returned Orders: 66386.99
+Net Profit/Loss: 697376.26
+
+=== Key Metrics ===
+Settlement Rate: 40.17%
+Return Rate: 8.44%
+Average Profit per Settled Order: 492.43
+Average Loss per Returned Order: 203.64
+
+=== Recommendations ===
+1. Monitor orders with status 'Completed - Pending Settlement' to ensure they get settled.
+2. Analyze orders with high losses to identify patterns and potential issues.
+3. Investigate return patterns to reduce return rates.
+4. Consider strategies to increase settlement rates for shipped orders.
