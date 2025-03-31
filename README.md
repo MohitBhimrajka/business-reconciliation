@@ -1,141 +1,133 @@
-# Order Reconciliation Application
+# Business Reconciliation Dashboard
 
-A Streamlit-based web application for processing and analyzing order, return, and settlement data. The application provides an interactive interface for file uploads, data analysis, and visualization of key metrics.
+A comprehensive dashboard for reconciling business data, built with Streamlit. This application helps in analyzing and reconciling orders, returns, and settlements data from various sources.
 
 ## Features
 
-- **File Upload and Processing**
+- **Data Upload and Processing**
   - Upload orders, returns, and settlement files
-  - Support for CSV and Excel file formats
-  - Automatic validation of file contents
-  - Standardized file naming convention
+  - Automatic data validation and cleaning
+  - Support for CSV and Excel files
+  - Historical data preservation
 
-- **Interactive Dashboard**
-  - Key metrics display (Total Orders, Net Profit/Loss, Settlement Rate, Return Rate)
-  - Interactive charts and visualizations
-  - Real-time status updates
-  - Order status distribution
-  - Profit/Loss distribution
+- **Analysis and Visualization**
+  - Interactive charts and graphs
+  - Trend analysis
+  - Anomaly detection
+  - Performance metrics
 
-- **Detailed Analysis**
-  - Comprehensive order analysis
-  - Status tracking and changes
-  - Financial calculations
-  - Settlement tracking
+- **Reporting**
+  - PDF report generation
+  - Multiple report types (Reconciliation, Financial Summary, Data Quality)
+  - Customizable report templates
+  - Automated report scheduling
 
-- **Master Data Management**
-  - Consolidated view of orders, returns, and settlements
-  - Deduplication of records
-  - Historical data tracking
+- **Data Quality Monitoring**
+  - Real-time data validation
+  - Error tracking and reporting
+  - Data completeness checks
+  - Schema validation
 
-- **Anomaly Detection**
-  - Identification of data inconsistencies
-  - Negative profit/loss tracking
-  - Missing settlement data
-  - Return/Settlement conflicts
+## Prerequisites
+
+- Python 3.8 or higher
+- pip (Python package installer)
+- Git (for version control)
 
 ## Installation
 
 1. Clone the repository:
-```bash
-git clone <repository-url>
-cd reconciliation
-```
+   ```bash
+   git clone https://github.com/yourusername/business-reconciliation.git
+   cd business-reconciliation
+   ```
 
-2. Create a virtual environment (recommended):
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+2. Create and activate a virtual environment:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
 
 3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Create necessary directories:
+   ```bash
+   mkdir -p data output logs reconciliation
+   ```
 
 ## Usage
 
-1. Start the Streamlit application:
-```bash
-streamlit run src/app.py
+1. Run the application:
+   ```bash
+   ./run.sh
+   ```
+
+2. Open your web browser and navigate to:
+   ```
+   http://localhost:8501
+   ```
+
+3. Upload your data files:
+   - Orders file (CSV/Excel)
+   - Returns file (CSV/Excel)
+   - Settlement file (CSV/Excel)
+
+4. Select the month and year for analysis
+
+5. View the analysis results and generate reports
+
+## Project Structure
+
+```
+business-reconciliation/
+├── src/
+│   ├── app.py              # Main Streamlit application
+│   ├── schemas.py          # Data schema definitions
+│   ├── validation.py       # Data validation logic
+│   └── reporting.py        # Report generation
+├── data/                   # Data files directory
+├── output/                 # Generated reports and outputs
+├── logs/                   # Application logs
+├── reconciliation/         # Reconciliation results
+├── requirements.txt        # Python dependencies
+├── run.sh                 # Application launcher
+└── README.md              # Project documentation
 ```
 
-2. Open your web browser and navigate to the URL shown in the terminal (typically http://localhost:8501)
+## Data Schema
 
-3. Use the application:
-   - Upload files using the File Upload tab
-   - View metrics and charts in the Dashboard tab
-   - Analyze detailed data in the Detailed Analysis tab
-   - Check master data in the Master Data tab
-   - Review anomalies in the Anomalies tab
+The application expects three main types of data files:
 
-## File Structure
+1. **Orders Data**
+   - Order details
+   - Customer information
+   - Product information
+   - Transaction details
 
-```
-reconciliation/
-├── data/               # Input data files
-├── output/            # Generated output files
-│   ├── master/       # Consolidated master files
-│   ├── analysis/     # Analysis results
-│   ├── reports/      # Generated reports
-│   └── visualizations/ # Interactive charts
-├── src/              # Source code
-│   ├── app.py        # Streamlit application
-│   ├── ingestion.py  # Data ingestion module
-│   ├── analysis.py   # Analysis module
-│   ├── reporting.py  # Reporting module
-│   └── utils.py      # Utility functions
-└── requirements.txt  # Python dependencies
-```
+2. **Returns Data**
+   - Return details
+   - Customer information
+   - Product information
+   - Settlement information
 
-## File Naming Convention
+3. **Settlement Data**
+   - Settlement details
+   - Payment information
+   - Commission details
+   - Logistics information
 
-Input files should follow the naming convention:
-- Orders: `orders-MM-YYYY.csv` or `orders-MM-YYYY.xlsx`
-- Returns: `returns-MM-YYYY.csv` or `returns-MM-YYYY.xlsx`
-- Settlement: `settlement-MM-YYYY.csv` or `settlement-MM-YYYY.xlsx`
+## Error Handling
 
-Where:
-- MM: Month (01-12)
-- YYYY: Year (e.g., 2024)
+The application includes comprehensive error handling for:
+- File upload errors
+- Data validation errors
+- Processing errors
+- Report generation errors
 
-## Data Requirements
-
-### Orders File
-Required columns:
-- `order_release_id`
-- `order_status`
-- `final_amount`
-- `total_mrp`
-
-### Returns File
-Required columns:
-- `order_release_id`
-- `return_amount`
-
-### Settlement File
-Required columns:
-- `order_release_id`
-- `settlement_amount`
-
-## Analysis Features
-
-### Order Status Tracking
-- Cancelled
-- Returned
-- Completed - Settled
-- Completed - Pending Settlement
-
-### Financial Calculations
-- Profit/Loss per order
-- Return settlement amounts
-- Order settlement amounts
-- Net profit/loss
-
-### Anomaly Detection
-- Negative profit/loss orders
-- Missing settlement data
-- Return/Settlement conflicts
+All errors are logged and displayed to the user with clear messages and resolution steps.
 
 ## Contributing
 
@@ -147,4 +139,14 @@ Required columns:
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Support
+
+For support, please open an issue in the GitHub repository or contact the maintainers.
+
+## Acknowledgments
+
+- Streamlit team for the amazing framework
+- Pandas team for data processing capabilities
+- All contributors and users of this project 

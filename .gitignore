@@ -37,25 +37,26 @@ venv.bak/
 .DS_Store
 
 # Project specific
-data/*
-!data/.gitkeep
-output/*
-!output/.gitkeep
-temp_*
+data/*.csv
+data/*.xlsx
+data/*.xls
+output/*.pdf
+output/*.png
+output/*.jpg
+logs/*.log
+reconciliation/*.csv
+reconciliation/*.xlsx
+reconciliation/*.xls
 
-# Logs
-*.log
-logs/
-log/
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
 
 # Jupyter Notebook
 .ipynb_checkpoints
-
-# Local development settings
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
 
 # Distribution / packaging
 .Python
@@ -84,4 +85,11 @@ htmlcov/
 nosetests.xml
 coverage.xml
 *.cover
-.hypothesis/ 
+.hypothesis/
+.pytest_cache/
+
+# Local development settings
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local 

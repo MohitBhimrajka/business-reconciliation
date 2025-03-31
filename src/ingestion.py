@@ -1,207 +1,252 @@
 """
-Data ingestion module for reconciliation application.
+Data ingestion module for the reconciliation application.
 """
-import os
-import logging
-from typing import Dict, List
 import pandas as pd
+import numpy as np
+from datetime import datetime
+import logging
 from pathlib import Path
+from typing import Dict, List, Tuple, Optional
+import os
+from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils import (
-    ensure_directories_exist, read_file,
-    ORDERS_PATTERN, RETURNS_PATTERN, SETTLEMENT_PATTERN,
-    ORDERS_MASTER, RETURNS_MASTER, SETTLEMENT_MASTER,
-    validate_file_columns
+    ensure_directories_exist, DATA_DIR, ORDERS_MASTER, RETURNS_MASTER,
+    SETTLEMENT_MASTER, ORDERS_PATTERN, RETURNS_PATTERN, SETTLEMENT_PATTERN,
+    COLUMN_RENAMES, read_file
+)
+from schemas import ORDERS_SCHEMA, RETURNS_SCHEMA, SETTLEMENT_SCHEMA
+from validation import (
+    validate_master_file, validate_new_file, merge_master_files,
+    ValidationResult, ValidationError, validate_dataframe
 )
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def scan_directory(directory: str) -> Dict[str, List[str]]:
-    """
-    Scan a directory for files matching the expected patterns.
-    
-    Args:
-        directory: Directory to scan
-        
-    Returns:
-        Dictionary with file types as keys and lists of file paths as values
-    """
-    if not os.path.exists(directory):
-        logger.error(f"Directory does not exist: {directory}")
-        return {"orders": [], "returns": [], "settlement": []}
-    
-    files = os.listdir(directory)
-    
-    import re
-    
-    orders_files = [os.path.join(directory, f) for f in files if re.match(ORDERS_PATTERN, f)]
-    returns_files = [os.path.join(directory, f) for f in files if re.match(RETURNS_PATTERN, f)]
-    settlement_files = [os.path.join(directory, f) for f in files if re.match(SETTLEMENT_PATTERN, f)]
-    
-    return {
-        "orders": orders_files,
-        "returns": returns_files,
-        "settlement": settlement_files
-    }
+# Constants for batch processing
+BATCH_SIZE = 1000  # Number of rows to process in each batch
+MAX_WORKERS = 4  # Maximum number of parallel workers
 
-def process_orders_file(file_path: Path) -> None:
+def process_file_in_batches(file_path: Path, schema: Dict, file_type: str) -> Tuple[pd.DataFrame, ValidationResult]:
     """
-    Process an orders file and update the orders master file.
-    Implements true append/update by source file tracking.
-    
-    Args:
-        file_path: Path to the orders file
-    """
-    # Read and validate the file
-    orders_df = read_file(file_path)
-    if not validate_file_columns(orders_df, 'orders'):
-        raise ValueError(f"Invalid columns in orders file: {file_path}")
-    
-    # Add source file information
-    orders_df['source_file'] = file_path.name
-    orders_df['ingestion_timestamp'] = pd.Timestamp.now()
-    
-    # Standardize column names
-    orders_df = orders_df.rename(columns={
-        'order release id': 'order_release_id',
-        'order line id': 'order_line_id',
-        'order status': 'order_status',
-        'final amount': 'final_amount',
-        'total mrp': 'total_mrp',
-        'coupon discount': 'coupon_discount',
-        'shipping charge': 'shipping_charge',
-        'gift charge': 'gift_charge',
-        'tax recovery': 'tax_recovery'
-    })
-    
-    # Convert numeric columns
-    numeric_columns = [
-        'final_amount', 'total_mrp', 'discount', 'coupon_discount',
-        'shipping_charge', 'gift_charge', 'tax_recovery'
-    ]
-    for col in numeric_columns:
-        if col in orders_df.columns:
-            orders_df[col] = pd.to_numeric(orders_df[col], errors='coerce')
-    
-    # Convert date columns
-    if 'order_date' in orders_df.columns:
-        orders_df['order_date'] = pd.to_datetime(orders_df['order_date'])
-    if 'return_creation_date' in orders_df.columns:
-        orders_df['return_creation_date'] = pd.to_datetime(orders_df['return_creation_date'])
-    
-    # Update master file with source file tracking
-    if ORDERS_MASTER.exists():
-        master_df = read_file(ORDERS_MASTER)
-        # Remove only records from the same source file
-        master_df = master_df[master_df['source_file'] != file_path.name]
-        # Append new data
-        master_df = pd.concat([master_df, orders_df], ignore_index=True)
-    else:
-        master_df = orders_df
-    
-    # Save updated master file
-    master_df.to_csv(ORDERS_MASTER, index=False)
-    logger.info(f"Successfully processed orders file: {file_path.name}")
-    logger.info(f"Master file now contains {len(master_df)} records")
-
-def process_returns_file(file_path: Path) -> None:
-    """
-    Process a returns file and update the returns master file.
-    Implements true append/update by source file tracking.
-    
-    Args:
-        file_path: Path to the returns file
-    """
-    # Read and validate the file
-    returns_df = read_file(file_path)
-    if not validate_file_columns(returns_df, 'returns'):
-        raise ValueError(f"Invalid columns in returns file: {file_path}")
-    
-    # Add source file information
-    returns_df['source_file'] = file_path.name
-    returns_df['ingestion_timestamp'] = pd.Timestamp.now()
-    
-    # Convert numeric columns
-    if 'total_actual_settlement' in returns_df.columns:
-        returns_df['total_actual_settlement'] = pd.to_numeric(returns_df['total_actual_settlement'], errors='coerce')
-    
-    # Update master file with source file tracking
-    if RETURNS_MASTER.exists():
-        master_df = read_file(RETURNS_MASTER)
-        # Remove only records from the same source file
-        master_df = master_df[master_df['source_file'] != file_path.name]
-        # Append new data
-        master_df = pd.concat([master_df, returns_df], ignore_index=True)
-    else:
-        master_df = returns_df
-    
-    # Save updated master file
-    master_df.to_csv(RETURNS_MASTER, index=False)
-    logger.info(f"Successfully processed returns file: {file_path.name}")
-    logger.info(f"Master file now contains {len(master_df)} records")
-
-def process_settlement_file(file_path: Path) -> None:
-    """
-    Process a settlement file and update the settlement master file.
-    Implements true append/update by source file tracking.
-    
-    Args:
-        file_path: Path to the settlement file
-    """
-    # Read and validate the file
-    settlement_df = read_file(file_path)
-    if not validate_file_columns(settlement_df, 'settlement'):
-        raise ValueError(f"Invalid columns in settlement file: {file_path}")
-    
-    # Add source file information
-    settlement_df['source_file'] = file_path.name
-    settlement_df['ingestion_timestamp'] = pd.Timestamp.now()
-    
-    # Convert numeric columns
-    if 'total_actual_settlement' in settlement_df.columns:
-        settlement_df['total_actual_settlement'] = pd.to_numeric(settlement_df['total_actual_settlement'], errors='coerce')
-    
-    # Convert date columns
-    if 'settlement_date' in settlement_df.columns:
-        settlement_df['settlement_date'] = pd.to_datetime(settlement_df['settlement_date'])
-    
-    # Update master file with source file tracking
-    if SETTLEMENT_MASTER.exists():
-        master_df = read_file(SETTLEMENT_MASTER)
-        # Remove only records from the same source file
-        master_df = master_df[master_df['source_file'] != file_path.name]
-        # Append new data
-        master_df = pd.concat([master_df, settlement_df], ignore_index=True)
-    else:
-        master_df = settlement_df
-    
-    # Save updated master file
-    master_df.to_csv(SETTLEMENT_MASTER, index=False)
-    logger.info(f"Successfully processed settlement file: {file_path.name}")
-    logger.info(f"Master file now contains {len(master_df)} records")
-
-def process_file(file_path: Path, file_type: str) -> bool:
-    """
-    Process a file based on its type.
-    
-    Args:
-        file_path: Path to the file
-        file_type: Type of file (orders, returns, settlement)
-    
-    Returns:
-        True if successful, False otherwise
+    Process a file in batches to handle large files efficiently.
     """
     try:
-        if file_type == 'orders':
-            process_orders_file(file_path)
-        elif file_type == 'returns':
-            process_returns_file(file_path)
-        elif file_type == 'settlement':
-            process_settlement_file(file_path)
+        logger.info(f"Processing {file_path} in batches")
+        
+        # Read the file in chunks
+        chunks = pd.read_csv(file_path, chunksize=BATCH_SIZE)
+        
+        # Process each chunk
+        processed_chunks = []
+        validation_result = ValidationResult()
+        
+        for chunk in chunks:
+            # Validate and convert the chunk
+            processed_chunk, chunk_result = validate_dataframe(chunk, schema, file_type)
+            
+            # Merge validation results
+            validation_result.errors.extend(chunk_result.errors)
+            validation_result.warnings.extend(chunk_result.warnings)
+            validation_result.stats['total_rows'] += chunk_result.stats['total_rows']
+            validation_result.stats['valid_rows'] += chunk_result.stats['valid_rows']
+            
+            processed_chunks.append(processed_chunk)
+        
+        # Combine processed chunks
+        if processed_chunks:
+            final_df = pd.concat(processed_chunks, ignore_index=True)
+            validation_result.stats['invalid_rows'] = validation_result.stats['total_rows'] - validation_result.stats['valid_rows']
+            return final_df, validation_result
         else:
-            logger.error(f"Invalid file type: {file_type}")
-            return False
-        return True
+            validation_result.add_error(0, 'process', "No valid data found in file")
+            return pd.DataFrame(), validation_result
+            
     except Exception as e:
-        logger.error(f"Error processing {file_type} file {file_path}: {e}")
-        return False 
+        logger.error(f"Error processing file {file_path}: {str(e)}")
+        validation_result = ValidationResult()
+        validation_result.add_error(0, 'process', str(e))
+        return pd.DataFrame(), validation_result
+
+def process_orders_file(file_path: Path) -> Tuple[bool, ValidationResult]:
+    """
+    Process orders file with validation and master file update.
+    """
+    try:
+        logger.info(f"Processing orders file: {file_path}")
+        
+        # Validate new file
+        new_df, validation_result = process_file_in_batches(
+            file_path, ORDERS_SCHEMA, 'orders'
+        )
+        
+        if not validation_result.is_valid:
+            logger.error(f"Validation failed for {file_path}")
+            return False, validation_result
+        
+        # Load and validate master file if exists
+        master_df = pd.DataFrame()
+        if ORDERS_MASTER.exists():
+            master_df, master_result = validate_master_file(
+                ORDERS_MASTER, ORDERS_SCHEMA, 'orders'
+            )
+            if not master_result.is_valid:
+                logger.error("Master file validation failed")
+                return False, master_result
+        
+        # Merge files
+        merged_df, merge_result = merge_master_files(
+            master_df, new_df, 'orders',
+            key_columns=['order_release_id', 'order_line_id']
+        )
+        
+        if not merge_result.is_valid:
+            logger.error("File merge failed")
+            return False, merge_result
+        
+        # Save updated master file
+        merged_df.to_csv(ORDERS_MASTER, index=False)
+        logger.info(f"Successfully processed {file_path}")
+        
+        return True, merge_result
+    
+    except Exception as e:
+        logger.error(f"Error processing orders file: {e}")
+        result = ValidationResult()
+        result.add_error(0, 'process', str(e))
+        return False, result
+
+def process_returns_file(file_path: Path) -> Tuple[bool, ValidationResult]:
+    """
+    Process returns file with validation and master file update.
+    """
+    try:
+        logger.info(f"Processing returns file: {file_path}")
+        
+        # Validate new file
+        new_df, validation_result = process_file_in_batches(
+            file_path, RETURNS_SCHEMA, 'returns'
+        )
+        
+        if not validation_result.is_valid:
+            logger.error(f"Validation failed for {file_path}")
+            return False, validation_result
+        
+        # Load and validate master file if exists
+        master_df = pd.DataFrame()
+        if RETURNS_MASTER.exists():
+            master_df, master_result = validate_master_file(
+                RETURNS_MASTER, RETURNS_SCHEMA, 'returns'
+            )
+            if not master_result.is_valid:
+                logger.error("Master file validation failed")
+                return False, master_result
+        
+        # Merge files
+        merged_df, merge_result = merge_master_files(
+            master_df, new_df, 'returns',
+            key_columns=['order_release_id', 'order_line_id']
+        )
+        
+        if not merge_result.is_valid:
+            logger.error("File merge failed")
+            return False, merge_result
+        
+        # Save updated master file
+        merged_df.to_csv(RETURNS_MASTER, index=False)
+        logger.info(f"Successfully processed {file_path}")
+        
+        return True, merge_result
+    
+    except Exception as e:
+        logger.error(f"Error processing returns file: {e}")
+        result = ValidationResult()
+        result.add_error(0, 'process', str(e))
+        return False, result
+
+def process_settlement_file(file_path: Path) -> Tuple[bool, ValidationResult]:
+    """
+    Process settlement file with validation and master file update.
+    """
+    try:
+        logger.info(f"Processing settlement file: {file_path}")
+        
+        # Validate new file
+        new_df, validation_result = process_file_in_batches(
+            file_path, SETTLEMENT_SCHEMA, 'settlement'
+        )
+        
+        if not validation_result.is_valid:
+            logger.error(f"Validation failed for {file_path}")
+            return False, validation_result
+        
+        # Load and validate master file if exists
+        master_df = pd.DataFrame()
+        if SETTLEMENT_MASTER.exists():
+            master_df, master_result = validate_master_file(
+                SETTLEMENT_MASTER, SETTLEMENT_SCHEMA, 'settlement'
+            )
+            if not master_result.is_valid:
+                logger.error("Master file validation failed")
+                return False, master_result
+        
+        # Merge files
+        merged_df, merge_result = merge_master_files(
+            master_df, new_df, 'settlement',
+            key_columns=['order_release_id', 'order_line_id']
+        )
+        
+        if not merge_result.is_valid:
+            logger.error("File merge failed")
+            return False, merge_result
+        
+        # Save updated master file
+        merged_df.to_csv(SETTLEMENT_MASTER, index=False)
+        logger.info(f"Successfully processed {file_path}")
+        
+        return True, merge_result
+    
+    except Exception as e:
+        logger.error(f"Error processing settlement file: {e}")
+        result = ValidationResult()
+        result.add_error(0, 'process', str(e))
+        return False, result
+
+def process_new_files() -> Dict[str, List[ValidationResult]]:
+    """
+    Process all new files in the data directory.
+    Returns a dictionary of results for each file type.
+    """
+    ensure_directories_exist()
+    
+    results = {
+        'orders': [],
+        'returns': [],
+        'settlement': []
+    }
+    
+    try:
+        # Process each file in the data directory
+        for file_path in DATA_DIR.glob('*.csv'):
+            file_name = file_path.name.lower()
+            
+            if ORDERS_PATTERN.match(file_name):
+                success, result = process_orders_file(file_path)
+                results['orders'].append(result)
+            elif RETURNS_PATTERN.match(file_name):
+                success, result = process_returns_file(file_path)
+                results['returns'].append(result)
+            elif SETTLEMENT_PATTERN.match(file_name):
+                success, result = process_settlement_file(file_path)
+                results['settlement'].append(result)
+            else:
+                logger.warning(f"Unknown file type: {file_name}")
+        
+        return results
+    
+    except Exception as e:
+        logger.error(f"Error processing new files: {e}")
+        return results 
