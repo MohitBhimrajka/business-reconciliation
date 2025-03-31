@@ -265,122 +265,104 @@ def validate_pincode(value: Any, column: str) -> Optional[str]:
 
 def validate_dataframe(df: pd.DataFrame, schema: Dict, file_type: str) -> Tuple[pd.DataFrame, ValidationResult]:
     """
-    Validate a DataFrame against a schema and return the validated DataFrame.
+    Validate a DataFrame according to the specified schema.
+    Returns the validated DataFrame and a ValidationResult object.
     """
-    errors = []
-    warnings = []
+    result = ValidationResult()
+    result.stats['total_rows'] = len(df)
+    
+    # Get column rename mappings for this file type
+    column_renames = COLUMN_RENAMES.get(file_type, {})
+    
+    # Rename columns according to mapping
+    df = df.rename(columns=column_renames)
     
     # Create a copy to avoid modifying the original
-    df_validated = df.copy()
-    
-    # Get column renames for this file type
-    rename_map = COLUMN_RENAMES.get(file_type, {})
-    
-    # First, rename columns according to mapping
-    df_validated = df_validated.rename(columns=rename_map)
+    df_converted = df.copy()
     
     # Add upload_timestamp if missing
-    if 'upload_timestamp' not in df_validated.columns:
-        df_validated['upload_timestamp'] = pd.Timestamp.now()
-        warnings.append({
-            'row': 0,
-            'column': 'upload_timestamp',
-            'message': 'Added missing upload_timestamp column with current timestamp'
-        })
+    if 'upload_timestamp' not in df_converted.columns:
+        df_converted['upload_timestamp'] = pd.Timestamp.now()
+        result.add_warning(0, 'upload_timestamp', "Added missing upload_timestamp column with current timestamp")
     
     # Define essential columns for each file type
     essential_columns = {
         "orders": [
-            'order_release_id', 'order_line_id', 'seller_order_id', 'order_status',
-            'packet_id', 'seller_packe_id', 'created_on', 'core_item_id',
-            'seller_sku_code', 'myntra_sku_code', 'brand', 'style_name',
-            'order_tracking_number', 'is_ship_rel'
+            "order_release_id", "order_line_id", "seller_order_id", "order_status",
+            "packet_id", "seller_packe_id", "created_on", "core_item_id",
+            "seller_sku_code", "myntra_sku_code", "brand", "style_name",
+            "order_tracking_number", "is_ship_rel", "upload_timestamp"
         ],
         "returns": [
-            'order_release_id', 'return_type', 'return_date', 'customer_paid_amount',
-            'return_id'
+            "order_release_id", "order_line_id", "return_type", "return_date",
+            "packet_id", "customer_paid_amount", "total_settlement",
+            "total_actual_settlement", "amount_pending_settlement",
+            "prepaid_commission_deduction", "prepaid_logistics_deduction",
+            "prepaid_payment", "postpaid_commission_deduction",
+            "postpaid_logistics_deduction", "postpaid_payment",
+            "return_id", "upload_timestamp"
         ],
         "settlement": [
-            'order_release_id', 'order_line_id', 'return_type', 'return_date',
-            'packet_id', 'customer_paid_amount'
+            "order_release_id", "order_line_id", "return_type", "return_date",
+            "packet_id", "customer_paid_amount", "upload_timestamp"
         ]
     }
     
-    # Get essential columns for this file type
-    required_columns = essential_columns.get(file_type, [])
+    # Keep only essential columns
+    df_converted = df_converted[essential_columns.get(file_type, [])]
     
-    # Check for missing required columns
-    missing_columns = [col for col in required_columns if col not in df_validated.columns]
-    if missing_columns:
-        # Try to find columns with similar names
-        for col in missing_columns:
-            similar_cols = [c for c in df_validated.columns if col.lower() in c.lower() or c.lower() in col.lower()]
-            if similar_cols:
-                warnings.append({
-                    'row': 0,
-                    'column': col,
-                    'message': f'Found similar columns: {similar_cols}. Please check if these should be mapped to {col}.'
-                })
-            else:
-                errors.append({
-                    'row': 0,
-                    'column': col,
-                    'message': f'Missing required column: {col}'
-                })
+    # Add missing required columns with default values
+    for col_name, col_info in schema.items():
+        if col_name not in df_converted.columns and col_name in essential_columns.get(file_type, []):
+            if col_name == 'upload_timestamp':
+                df_converted[col_name] = pd.Timestamp.now()
+            elif col_info['type'] == DATE_TYPE:
+                df_converted[col_name] = pd.NaT
+            elif col_info['type'] in [INTEGER_TYPE, FLOAT_TYPE]:
+                df_converted[col_name] = 0
+            elif col_info['type'] == BOOLEAN_TYPE:
+                df_converted[col_name] = False
+            elif col_info['type'] == STRING_TYPE:
+                df_converted[col_name] = ''
+            result.add_warning(0, col_name, f"Added missing required column with default value")
+    
+    # Track validation errors
+    validation_errors = []
     
     # Process each column according to schema
     for col_name, col_info in schema.items():
-        if col_name not in df_validated.columns:
-            if col_info['required']:
-                errors.append({
-                    'row': 0,
-                    'column': col_name,
-                    'message': f'Missing required column: {col_name}'
-                })
+        if col_name not in df_converted.columns:
             continue
         
         target_type = col_info['type']
         
         try:
             if target_type == DATE_TYPE:
-                df_validated[col_name] = df_validated[col_name].apply(validate_date)
+                df_converted[col_name] = df_converted[col_name].apply(lambda x: validate_date(x, col_name))
             elif target_type in [INTEGER_TYPE, FLOAT_TYPE]:
-                df_validated[col_name] = df_validated[col_name].apply(
-                    lambda x: validate_numeric(x, target_type)
+                df_converted[col_name] = df_converted[col_name].apply(
+                    lambda x: validate_numeric(x, col_name, target_type)
                 )
             elif target_type == BOOLEAN_TYPE:
-                df_validated[col_name] = df_validated[col_name].apply(validate_boolean)
+                df_converted[col_name] = df_converted[col_name].apply(validate_boolean)
             elif target_type == STRING_TYPE:
-                df_validated[col_name] = df_validated[col_name].astype(str)
+                df_converted[col_name] = df_converted[col_name].astype(str)
             
             # Check for required columns with null values
-            if col_info['required'] and df_validated[col_name].isna().any():
-                null_count = df_validated[col_name].isna().sum()
-                errors.append({
-                    'row': 0,
-                    'column': col_name,
-                    'message': f'Column {col_name} has {null_count} null values but is required'
-                })
+            if col_info['required'] and df_converted[col_name].isna().any():
+                null_count = df_converted[col_name].isna().sum()
+                validation_errors.append(
+                    f"Column {col_name} has {null_count} null values but is required"
+                )
         except Exception as e:
-            errors.append({
-                'row': 0,
-                'column': col_name,
-                'message': f'Error processing column {col_name}: {str(e)}'
-            })
+            validation_errors.append(f"Error processing column {col_name}: {str(e)}")
     
-    # Log warnings
-    for warning in warnings:
-        logger.warning(f"Validation warning in row {warning['row']}, column {warning['column']}: {warning['message']}")
+    if validation_errors:
+        logger.warning(f"Validation errors in {file_type} file:")
+        for error in validation_errors:
+            logger.warning(error)
     
-    # Log errors
-    for error in errors:
-        logger.error(f"Validation error in row {error['row']}, column {error['column']}: {error['message']}")
-    
-    return df_validated, ValidationResult(
-        is_valid=len(errors) == 0,
-        errors=errors,
-        warnings=warnings
-    )
+    return df_converted, result
 
 def validate_master_file(file_path: Path, schema: Dict, file_type: str) -> Tuple[pd.DataFrame, ValidationResult]:
     """

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Any
 import functools
 import logging
-from cachetools import TTLCache, cached
+from cachetools import TTLCache, cached, keys
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import gc
@@ -179,31 +179,85 @@ def load_master_file(file_path: Path) -> pd.DataFrame:
         raise
 
 @cached(cache=analysis_cache)
-def analyze_orders_cached(orders_df: pd.DataFrame, returns_df: pd.DataFrame, settlement_df: pd.DataFrame) -> tuple:
-    """Cached version of analyze_orders."""
-    try:
-        # Process DataFrames in parallel
-        orders_df, returns_df, settlement_df = parallel_process_dataframes([orders_df, returns_df, settlement_df])
-        
-        # Run analysis
-        analysis_df, summary = analyze_orders(orders_df, returns_df, settlement_df)
-        
-        # Optimize result DataFrame
-        analysis_df = optimize_dataframe(analysis_df)
-        
-        return analysis_df, summary
-    except Exception as e:
-        logger.error(f"Error in analyze_orders_cached: {str(e)}")
-        raise
+def analyze_orders_cached_v3(orders_mtime, returns_mtime, settlement_mtime) -> tuple:
+    """Cached version of analyze_orders using file modification times as cache keys."""
+    logger.info("Running cached analysis function analyze_orders_cached_v3")
+    
+    # Load data inside the cached function
+    orders_df = load_master_file(ORDERS_MASTER)
+    returns_df = load_master_file(RETURNS_MASTER)
+    settlement_df = load_master_file(SETTLEMENT_MASTER)
 
-@cached(cache=visualization_cache)
-def generate_visualizations_cached(analysis_df: pd.DataFrame, summary: Dict) -> Dict:
-    """Cached version of generate_visualizations."""
+    # Store loaded DFs in session state
+    st.session_state.orders_df = orders_df
+    st.session_state.returns_df = returns_df
+    st.session_state.settlement_df = settlement_df
+
+    # Load previous analysis if available
+    previous_analysis_df = None
+    if ANALYSIS_OUTPUT.exists():
+        previous_analysis_df = load_master_file(ANALYSIS_OUTPUT)
+
+    # Run analysis
+    logger.info("Calling analyze_orders from cached function")
+    analysis_df, summary = analyze_orders(orders_df, returns_df, settlement_df, previous_analysis_df)
+
+    # Optimize result DataFrame
+    logger.info("Optimizing analysis_df in cached function")
+    analysis_df = optimize_dataframe(analysis_df)
+
+    return analysis_df, summary
+
+def process_uploaded_files():
+    """Process uploaded files and update master files."""
     try:
-        return generate_visualizations(analysis_df, summary)
+        # Process each file type
+        for file_type, file_path in st.session_state.uploaded_files.items():
+            if file_path:
+                logger.info(f"Processing {file_type} file: {file_path}")
+                process_file(file_path, file_type)
+        
+        # Ensure master files exist before getting mtime
+        if not ORDERS_MASTER.exists() or not RETURNS_MASTER.exists() or not SETTLEMENT_MASTER.exists():
+            st.error("Master files are missing after processing. Cannot proceed with analysis.")
+            return
+
+        # Get modification times
+        orders_mtime = os.path.getmtime(ORDERS_MASTER)
+        returns_mtime = os.path.getmtime(RETURNS_MASTER)
+        settlement_mtime = os.path.getmtime(SETTLEMENT_MASTER)
+
+        # Call the cached function with timestamps
+        logger.info("Calling analyze_orders_cached_v3")
+        st.session_state.analysis_df, st.session_state.summary = analyze_orders_cached_v3(
+            orders_mtime, returns_mtime, settlement_mtime
+        )
+        logger.info("Analysis complete. Analysis DF rows: %d", len(st.session_state.analysis_df))
+
+        # Generate visualizations
+        logger.info("Generating visualizations")
+        st.session_state.visualizations = generate_visualizations(
+            st.session_state.analysis_df, st.session_state.summary
+        )
+
+        # Identify anomalies
+        logger.info("Identifying anomalies")
+        st.session_state.anomalies_df = identify_anomalies(
+            st.session_state.analysis_df,
+            st.session_state.orders_df,
+            st.session_state.returns_df,
+            st.session_state.settlement_df
+        )
+
+        # Clear newly added files list
+        st.session_state.newly_added_files = []
+
+        st.success("Files processed and analyzed successfully!")
+
     except Exception as e:
-        logger.error(f"Error in generate_visualizations_cached: {str(e)}")
-        raise
+        logger.error(f"Error during analysis or post-processing: {str(e)}")
+        st.error(f"Error during analysis: {str(e)}")
+        st.exception(e)
 
 def display_schema_info():
     """Display information about required columns and data types."""
@@ -389,65 +443,6 @@ def display_validation_results(results: Dict[str, List[ValidationResult]]):
     except Exception as e:
         st.error(f"Error displaying validation results: {str(e)}")
         logger.error(f"Error in display_validation_results: {str(e)}")
-
-def process_uploaded_files():
-    """Process newly uploaded files and update analysis."""
-    try:
-        results = {
-            'orders': [],
-            'returns': [],
-            'settlement': []
-        }
-        
-        # Process each new file
-        for file_path in st.session_state.newly_added_files:
-            file_type = file_path.split('-')[0]  # Extract type from filename
-            if file_type == 'orders':
-                success, result = process_orders_file(DATA_DIR / file_path)
-                results['orders'].append(result)
-            elif file_type == 'returns':
-                success, result = process_returns_file(DATA_DIR / file_path)
-                results['returns'].append(result)
-            elif file_type == 'settlement':
-                success, result = process_settlement_file(DATA_DIR / file_path)
-                results['settlement'].append(result)
-        
-        # Store validation results
-        st.session_state.validation_results = results
-        
-        # Load master files with caching
-        orders_df = load_master_file(ORDERS_MASTER)
-        returns_df = load_master_file(RETURNS_MASTER)
-        settlement_df = load_master_file(SETTLEMENT_MASTER)
-        
-        # Load previous analysis with caching
-        previous_analysis_df = None
-        if os.path.exists(ANALYSIS_OUTPUT):
-            previous_analysis_df = load_master_file(ANALYSIS_OUTPUT)
-        
-        # Run analysis with caching
-        st.session_state.analysis_df, st.session_state.summary = analyze_orders_cached(
-            orders_df, returns_df, settlement_df
-        )
-        
-        # Generate visualizations with caching
-        st.session_state.visualizations = generate_visualizations_cached(
-            st.session_state.analysis_df, st.session_state.summary
-        )
-        
-        # Identify anomalies
-        st.session_state.anomalies_df = identify_anomalies(
-            st.session_state.analysis_df, orders_df, returns_df, settlement_df
-        )
-        
-        # Clear newly added files
-        st.session_state.newly_added_files = []
-        
-        st.success("Files processed successfully!")
-    except Exception as e:
-        logger.error(f"Error processing files: {str(e)}")
-        st.error(f"Error processing files: {str(e)}")
-        st.exception(e)
 
 def display_dashboard():
     """Display the main dashboard with metrics and charts."""
@@ -1616,14 +1611,18 @@ def handle_file_upload():
                         st.session_state.settlement_df = settlement_df
                         
                         # Analyze orders with historical context
-                        analysis_df, summary = analyze_orders_cached(orders_df, returns_df, settlement_df)
+                        analysis_df, summary = analyze_orders_cached_v3(
+                            os.path.getmtime(ORDERS_MASTER),
+                            os.path.getmtime(RETURNS_MASTER),
+                            os.path.getmtime(SETTLEMENT_MASTER)
+                        )
                         
                         # Store results in session state
                         st.session_state.analysis_df = analysis_df
                         st.session_state.summary = summary
                         
                         # Generate visualizations
-                        st.session_state.visualizations = generate_visualizations_cached(analysis_df, summary)
+                        st.session_state.visualizations = generate_visualizations(analysis_df, summary)
                         
                         # Identify anomalies
                         st.session_state.anomalies_df = identify_anomalies(analysis_df)
@@ -1676,35 +1675,55 @@ def check_existing_data(year: str, month: str) -> Dict[str, Any]:
         # Check orders
         if os.path.exists(ORDERS_MASTER):
             orders_df = load_master_file(ORDERS_MASTER)
-            month_data = orders_df[orders_df['created_on'].dt.strftime('%Y-%m') == f"{year}-{month}"]
-            if not month_data.empty:
-                existing_data['orders'] = {
-                    'count': len(month_data),
-                    'total_value': month_data['order_value'].sum(),
-                    'last_updated': month_data['created_on'].max()
-                }
+            if 'created_on' in orders_df.columns:
+                # Convert to datetime robustly, coercing errors
+                orders_df['created_on'] = pd.to_datetime(orders_df['created_on'], errors='coerce')
+                # Filter out rows where conversion failed before filtering by date
+                orders_df = orders_df.dropna(subset=['created_on'])
+                if not orders_df.empty:
+                    month_data = orders_df[orders_df['created_on'].dt.strftime('%Y-%m') == f"{year}-{month}"]
+                    if not month_data.empty:
+                        existing_data['orders'] = {
+                            'count': len(month_data),
+                            'total_value': month_data['order_value'].sum() if 'order_value' in month_data.columns else 0,
+                            'last_updated': month_data['created_on'].max()
+                        }
+            else:
+                logger.warning("'created_on' column not found in orders_master.csv for checking existing data.")
         
         # Check returns
         if os.path.exists(RETURNS_MASTER):
             returns_df = load_master_file(RETURNS_MASTER)
-            month_data = returns_df[returns_df['created_on'].dt.strftime('%Y-%m') == f"{year}-{month}"]
-            if not month_data.empty:
-                existing_data['returns'] = {
-                    'count': len(month_data),
-                    'total_value': month_data['return_value'].sum(),
-                    'last_updated': month_data['created_on'].max()
-                }
+            if 'created_on' in returns_df.columns:
+                returns_df['created_on'] = pd.to_datetime(returns_df['created_on'], errors='coerce')
+                returns_df = returns_df.dropna(subset=['created_on'])
+                if not returns_df.empty:
+                    month_data = returns_df[returns_df['created_on'].dt.strftime('%Y-%m') == f"{year}-{month}"]
+                    if not month_data.empty:
+                        existing_data['returns'] = {
+                            'count': len(month_data),
+                            'total_value': month_data['return_value'].sum() if 'return_value' in month_data.columns else 0,
+                            'last_updated': month_data['created_on'].max()
+                        }
+            else:
+                logger.warning("'created_on' column not found in returns_master.csv for checking existing data.")
         
         # Check settlements
         if os.path.exists(SETTLEMENT_MASTER):
             settlement_df = load_master_file(SETTLEMENT_MASTER)
-            month_data = settlement_df[settlement_df['created_on'].dt.strftime('%Y-%m') == f"{year}-{month}"]
-            if not month_data.empty:
-                existing_data['settlement'] = {
-                    'count': len(month_data),
-                    'total_value': month_data['settlement_amount'].sum(),
-                    'last_updated': month_data['created_on'].max()
-                }
+            if 'created_on' in settlement_df.columns:
+                settlement_df['created_on'] = pd.to_datetime(settlement_df['created_on'], errors='coerce')
+                settlement_df = settlement_df.dropna(subset=['created_on'])
+                if not settlement_df.empty:
+                    month_data = settlement_df[settlement_df['created_on'].dt.strftime('%Y-%m') == f"{year}-{month}"]
+                    if not month_data.empty:
+                        existing_data['settlement'] = {
+                            'count': len(month_data),
+                            'total_value': month_data['settlement_amount'].sum() if 'settlement_amount' in month_data.columns else 0,
+                            'last_updated': month_data['created_on'].max()
+                        }
+            else:
+                logger.warning("'created_on' column not found in settlement_master.csv for checking existing data.")
         
         return existing_data
     except Exception as e:

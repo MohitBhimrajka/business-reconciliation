@@ -193,7 +193,7 @@ def validate_and_convert_dataframe(
 
 def read_file(file_path: Union[str, Path], file_type: Optional[str] = None) -> pd.DataFrame:
     """
-    Read a file and return a DataFrame.
+    Read a file and return a DataFrame with robust error handling.
     """
     try:
         # Convert Path to string if needed
@@ -223,40 +223,71 @@ def read_file(file_path: Union[str, Path], file_type: Optional[str] = None) -> p
         if not schema:
             raise ValueError(f"Invalid file type: {file_type}")
         
-        # First try reading with standard settings
-        try:
-            df = pd.read_csv(
-                file_path_str,
-                sep='\t',
-                encoding='utf-8',
-                dtype=str
-            )
-        except Exception as e:
-            logger.warning(f"Standard CSV reading failed: {str(e)}. Trying alternative approach...")
-            
-            # Try alternative approach with more lenient settings
+        # Try different reading strategies
+        strategies = [
+            # Strategy 1: Standard tab-separated reading
+            {
+                'sep': '\t',
+                'encoding': 'utf-8',
+                'dtype': str,
+                'quoting': 0,  # QUOTE_MINIMAL
+                'on_bad_lines': 'warn'
+            },
+            # Strategy 2: Comma-separated reading
+            {
+                'sep': ',',
+                'encoding': 'utf-8',
+                'dtype': str,
+                'quoting': 0,
+                'on_bad_lines': 'warn'
+            },
+            # Strategy 3: Tab-separated with no quoting
+            {
+                'sep': '\t',
+                'encoding': 'utf-8',
+                'dtype': str,
+                'quoting': 3,  # QUOTE_NONE
+                'escapechar': '\\',
+                'on_bad_lines': 'warn'
+            },
+            # Strategy 4: Chunked reading with error skipping
+            {
+                'sep': '\t',
+                'encoding': 'utf-8',
+                'dtype': str,
+                'quoting': 3,
+                'escapechar': '\\',
+                'on_bad_lines': 'skip',
+                'chunksize': 1000
+            }
+        ]
+        
+        df = None
+        last_error = None
+        
+        for i, strategy in enumerate(strategies):
             try:
-                # Read the file in chunks to handle large files
-                chunks = []
-                chunk_size = 1000  # Adjust based on your needs
+                if strategy.get('chunksize'):
+                    # Handle chunked reading
+                    chunks = []
+                    for chunk in pd.read_csv(file_path_str, **strategy):
+                        chunks.append(chunk)
+                    df = pd.concat(chunks, ignore_index=True)
+                else:
+                    # Handle standard reading
+                    df = pd.read_csv(file_path_str, **strategy)
                 
-                for chunk in pd.read_csv(
-                    file_path_str,
-                    sep='\t',
-                    encoding='utf-8',
-                    dtype=str,
-                    chunksize=chunk_size,
-                    quoting=3,  # QUOTE_NONE
-                    escapechar='\\',
-                    on_bad_lines='warn'
-                ):
-                    chunks.append(chunk)
-                
-                df = pd.concat(chunks, ignore_index=True)
-                
-            except Exception as e2:
-                logger.error(f"Alternative CSV reading failed: {str(e2)}")
-                raise
+                if df is not None and not df.empty:
+                    logger.info(f"Successfully read file using strategy {i+1}")
+                    break
+                    
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Strategy {i+1} failed: {str(e)}")
+                continue
+        
+        if df is None or df.empty:
+            raise last_error or ValueError("All reading strategies failed")
         
         # Clean up the DataFrame
         # Remove any rows where all values are NaN
@@ -264,6 +295,24 @@ def read_file(file_path: Union[str, Path], file_type: Optional[str] = None) -> p
         
         # Clean column names
         df.columns = df.columns.str.strip()
+        
+        # Ensure all required columns exist
+        required_columns = [col for col, info in schema.items() if info['required']]
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        
+        if missing_columns:
+            logger.warning(f"Missing required columns: {missing_columns}")
+            # Add missing columns with default values
+            for col in missing_columns:
+                col_type = schema[col]['type']
+                if col_type == DATE_TYPE:
+                    df[col] = pd.Timestamp.now()
+                elif col_type in [INTEGER_TYPE, FLOAT_TYPE]:
+                    df[col] = 0
+                elif col_type == BOOLEAN_TYPE:
+                    df[col] = False
+                else:
+                    df[col] = ''
         
         # Validate DataFrame against schema
         df, result = validate_dataframe(df, schema, file_type)
@@ -295,4 +344,61 @@ def get_file_identifier(file_path: Union[str, Path]) -> str:
     parts = filename.split('-')
     if len(parts) >= 3:
         return f"{parts[1]}-{parts[2].split('.')[0]}"
-    return "unknown" 
+    return "unknown"
+
+def optimize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Optimize DataFrame memory usage by downcasting numeric columns."""
+    try:
+        for col in df.columns:
+            col_type = df[col].dtype
+
+            # Skip datetime/timedelta columns from numeric optimization
+            if pd.api.types.is_datetime64_any_dtype(df[col]) or \
+               pd.api.types.is_timedelta64_dtype(df[col]):
+                continue
+
+            if col_type != object:
+                # Check if column is purely numeric after handling potential NaNs
+                numeric_col = pd.to_numeric(df[col], errors='coerce')
+                if not numeric_col.isna().all():  # Check if there are any numbers
+                    try:
+                        # Use the numeric version for min/max after coercing errors
+                        c_min = numeric_col.min()
+                        c_max = numeric_col.max()
+
+                        # Skip if min/max are NaN
+                        if pd.isna(c_min) or pd.isna(c_max):
+                            continue
+
+                        # Now perform downcasting comparisons safely
+                        if str(col_type)[:3] == 'int':
+                            if c_min >= np.iinfo(np.int8).min and c_max <= np.iinfo(np.int8).max:
+                                df[col] = df[col].astype(np.int8)
+                            elif c_min >= np.iinfo(np.int16).min and c_max <= np.iinfo(np.int16).max:
+                                df[col] = df[col].astype(np.int16)
+                            elif c_min >= np.iinfo(np.int32).min and c_max <= np.iinfo(np.int32).max:
+                                df[col] = df[col].astype(np.int32)
+                            else:
+                                df[col] = df[col].astype(np.int64)
+                        else:  # Float types
+                            if isinstance(c_min, (int, float, np.number)) and isinstance(c_max, (int, float, np.number)):
+                                if c_min >= np.finfo(np.float16).min and c_max <= np.finfo(np.float16).max:
+                                    df[col] = df[col].astype(np.float16)
+                                elif c_min >= np.finfo(np.float32).min and c_max <= np.finfo(np.float32).max:
+                                    df[col] = df[col].astype(np.float32)
+                                else:
+                                    df[col] = df[col].astype(np.float64)
+                            else:
+                                logger.warning(f"Min/Max for float column '{col}' are not numeric, skipping optimization.")
+
+                    except TypeError as te:
+                        logger.warning(f"Skipping optimization for column '{col}' due to TypeError during min/max: {te}")
+                    except Exception as ex:
+                        logger.error(f"Unexpected error during optimization for column '{col}': {ex}")
+                else:
+                    logger.warning(f"Column '{col}' contains no numeric data after coercion, skipping optimization.")
+
+        return df
+    except Exception as e:
+        logger.error(f"Error optimizing DataFrame: {str(e)}")
+        return df 

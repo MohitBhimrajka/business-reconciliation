@@ -116,11 +116,11 @@ create_directories() {
 
 # Function to backup master files
 backup_master_files() {
-    if [ -f "data/orders_master.csv" ] || [ -f "data/returns_master.csv" ] || [ -f "data/settlement_master.csv" ]; then
+    if [ -f "output/master/orders_master.csv" ] || [ -f "output/master/returns_master.csv" ] || [ -f "output/master/settlement_master.csv" ]; then
         print_message "Creating backup of master files..." "$BLUE"
-        local backup_dir="data/backups/$(date +%Y%m%d_%H%M%S)"
+        local backup_dir="output/master/backups/$(date +%Y%m%d_%H%M%S)"
         mkdir -p "$backup_dir"
-        cp data/*_master.csv "$backup_dir/" 2>/dev/null
+        cp output/master/*_master.csv "$backup_dir/" 2>/dev/null
         print_message "Backup created in $backup_dir" "$GREEN"
     fi
 }
@@ -128,14 +128,28 @@ backup_master_files() {
 # Function to cleanup old backups
 cleanup_old_backups() {
     print_message "Cleaning up old backups..." "$BLUE"
-    find data/backups -type d -mtime +7 -exec rm -rf {} \;
+    find output/master/backups -type d -mtime +7 -exec rm -rf {} \;
     print_message "Old backups cleaned up" "$GREEN"
+}
+
+# Function to format file size
+format_file_size() {
+    local size=$1
+    local units=("B" "KB" "MB" "GB" "TB")
+    local unit_index=0
+    
+    while [ $size -ge 1024 ] && [ $unit_index -lt 4 ]; do
+        size=$((size / 1024))
+        unit_index=$((unit_index + 1))
+    done
+    
+    echo "${size}${units[$unit_index]}"
 }
 
 # Function to check master files
 check_master_files() {
     print_message "Checking master files..." "$BLUE"
-    local files=("data/orders_master.csv" "data/returns_master.csv" "data/settlement_master.csv")
+    local files=("output/master/orders_master.csv" "output/master/returns_master.csv" "output/master/settlement_master.csv")
     local missing_files=()
     
     for file in "${files[@]}"; do
@@ -143,7 +157,7 @@ check_master_files() {
             missing_files+=("$file")
         else
             local size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file")
-            print_message "Found $file (Size: $(numfmt --to=iec $size))" "$GREEN"
+            print_message "Found $file (Size: $(format_file_size $size))" "$GREEN"
         fi
     done
     
